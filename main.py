@@ -1,48 +1,26 @@
-# Architecture Overview
+from src.orchestrator.orchestrator import Orchestrator
+from src.jira.agent import JiraAgent
+from src.github.agent import GitHubAgent
+from src.docker.agent import DockerAgent
+from src.kubernetes.agent import KubernetesAgent
+from src.terraform.agent import TerraformAgent
+from src.ansible.agent import AnsibleAgent
+from src.monitoring.agent import MonitoringAgent
 
-## Sprint 1 Architecture
 
-This sprint establishes the backend foundation.
+def main():
+    orchestrator = Orchestrator()
 
-```text
-User / Future Automation
-        |
-        v
-FastAPI Backend
-        |
-        v
-Health API / Config / Logging
-        |
-        v
-Future AI Orchestrator
-```
+    orchestrator.register_agent(JiraAgent())
+    orchestrator.register_agent(GitHubAgent())
+    orchestrator.register_agent(DockerAgent())
+    orchestrator.register_agent(KubernetesAgent())
+    orchestrator.register_agent(TerraformAgent())
+    orchestrator.register_agent(AnsibleAgent())
+    orchestrator.register_agent(MonitoringAgent())
 
-## Future Architecture
+    orchestrator.run()
 
-```text
-Jira
-  |
-  v
-AI Orchestrator
-  |
-  v
-Agent Router
-  |
-  +--> Jira Agent
-  +--> GitHub Agent
-  +--> Terraform Agent
-  +--> Kubernetes Agent
-  +--> Docker Agent
-  +--> CI/CD Agent
-  +--> Security Agent
-  +--> Monitoring Agent
-  +--> Documentation Agent
-```
 
-## Design Principles
-
-- Human approval before production changes
-- Clear agent responsibilities
-- Small incremental implementation
-- Testable components
-- Cloud and platform engineering focus
+if __name__ == "__main__":
+    main()

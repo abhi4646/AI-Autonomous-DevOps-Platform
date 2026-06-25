@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ai-devops-platform}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ai-devops-platform}}
+  template:
+    metadata: {labels: {app: ai-devops-platform}}
+    spec:
+      containers:
+        - name: ai-devops-platform
+          image: ai-devops-platform:latest
+          imagePullPolicy: Never

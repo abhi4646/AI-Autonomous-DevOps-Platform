@@ -1,0 +1,4 @@
+services:
+  ai-devops:
+    build: .
+    env_file: [.env]

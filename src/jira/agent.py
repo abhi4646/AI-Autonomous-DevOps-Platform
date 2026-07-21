@@ -10,7 +10,9 @@ class JiraAgent(BaseAgent):
     def ready(self): return all([self.base_url, settings.jira_email, settings.jira_api_token, settings.jira_project_key])
     def list_issues(self, max_results=10):
         if not self.ready(): return []
-        data=request_json('POST', f'{self.base_url}/rest/api/3/search', auth=self.auth, headers=self.headers, json={
+        data = request_json(
+    "POST",
+    f"{self.base_url}/rest/api/3/search/jql", auth=self.auth, headers=self.headers, json={
             'jql': f'project = {settings.jira_project_key} ORDER BY created DESC',
             'maxResults': max_results,
             'fields':['summary','status','priority','assignee','issuetype']})

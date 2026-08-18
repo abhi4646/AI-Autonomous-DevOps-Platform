@@ -1,5 +1,6 @@
-import shutil
+import os
 import subprocess
+from pathlib import Path
 
 from src.agents import BaseAgent
 from src.core.config import settings
@@ -10,26 +11,31 @@ class AnsibleAgent(BaseAgent):
         super().__init__("Ansible Agent")
 
     def execute(self, context=None):
-        command = [
-            "ansible-playbook",
-            "-i",
-            settings.ansible_inventory_path,
-            settings.ansible_playbook_path,
-        ]
+        # Convert:
+        # C:\Users\abhis\Documents\project
+        # into:
+        # /mnt/c/Users/abhis/Documents/project
+        windows_cwd = Path(os.getcwd())
 
-        # Ansible is normally run from Linux/macOS/WSL.
-        # Do not crash the whole platform if it is unavailable.
-        if shutil.which("ansible-playbook") is None:
-            return {
-                "ansible": {
-                    "status": "not_installed",
-                    "message": (
-                        "ansible-playbook is not available on this host. "
-                        "Use WSL/Linux for live Ansible execution."
-                    ),
-                    "command": " ".join(command),
-                }
-            }
+        drive = windows_cwd.drive.rstrip(":").lower()
+        rest = windows_cwd.as_posix().split(":", 1)[-1]
+
+        linux_cwd = f"/mnt/{drive}{rest}"
+
+        command = [
+            "wsl",
+            "-d",
+            "Ubuntu",
+            "--",
+            "bash",
+            "-lc",
+            (
+                f"cd '{linux_cwd}' && "
+                f"ansible-playbook "
+                f"-i '{settings.ansible_inventory_path}' "
+                f"'{settings.ansible_playbook_path}'"
+            ),
+        ]
 
         if settings.app_mode == "dry_run":
             return {
@@ -43,13 +49,15 @@ class AnsibleAgent(BaseAgent):
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         return {
             "ansible": {
                 "status": "success" if result.returncode == 0 else "failed",
                 "returncode": result.returncode,
-                "stdout": result.stdout[-1500:],
-                "stderr": result.stderr[-1500:],
+                "stdout": (result.stdout or "")[-2000:],
+                "stderr": (result.stderr or "")[-2000:],
             }
         }

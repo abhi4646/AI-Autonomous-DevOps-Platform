@@ -52,10 +52,15 @@ class Orchestrator:
 
         branch_name = github_agent.make_branch_name(selected_issue)
 
+        branch_result = github_agent.create_branch(
+            branch_name=branch_name,
+            source_branch="main",
+        )
+
         results["Automation"] = {
-            "status": "dry_run",
+            "status": "completed",
             "selected_issue": selected_issue,
-            "planned_branch": branch_name,
+            "branch_result": branch_result,
         }
 
         return results

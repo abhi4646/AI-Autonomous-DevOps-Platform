@@ -276,3 +276,5 @@ Observe → Analyze → Decide → Execute → Validate → Report
 ---
 
 Built as a hands-on AI + DevOps engineering project demonstrating multi-agent orchestration, infrastructure automation, CI/CD, testing, and SDLC integration.
+
+<!-- Branch protection test -->

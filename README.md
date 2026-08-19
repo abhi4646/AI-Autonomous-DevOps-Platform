@@ -23,3 +23,5 @@ py -m pytest
 ```
 
 Copy `.env.example` to `.env`. Never commit `.env`.
+
+<!-- Branch protection test -->

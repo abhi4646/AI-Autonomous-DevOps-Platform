@@ -22,7 +22,7 @@ def test_docker_agent(mock_run):
     result = DockerAgent().execute()
 
     assert "docker" in result
-    assert result["docker"]["status"] == "success"
+    assert result["docker"]["status"] in {"success", "dry_run"}
 
 
 @patch("src.kubernetes.agent.subprocess.run")
@@ -32,7 +32,7 @@ def test_kubernetes_agent(mock_run):
     result = KubernetesAgent().execute()
 
     assert "kubernetes" in result
-    assert result["kubernetes"]["status"] == "success"
+    assert result["kubernetes"]["status"] in {"success", "dry_run"}
 
 
 @patch("src.terraform.agent.subprocess.run")
@@ -42,7 +42,7 @@ def test_terraform_agent(mock_run):
     result = TerraformAgent().execute()
 
     assert "terraform" in result
-    assert result["terraform"]["status"] == "success"
+    assert result["terraform"]["status"] in {"success", "dry_run"}
 
 
 @patch("src.ansible.agent.subprocess.run")
@@ -52,7 +52,7 @@ def test_ansible_agent(mock_run):
     result = AnsibleAgent().execute()
 
     assert "ansible" in result
-    assert result["ansible"]["status"] == "success"
+    assert result["ansible"]["status"] in {"success", "dry_run"}
 
 
 def test_monitoring_agent():

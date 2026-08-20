@@ -1,6 +1,10 @@
+from src.ai.decision_engine import DecisionEngine
+
+
 class Orchestrator:
     def __init__(self):
         self.agents = []
+        self.decision_engine = DecisionEngine()
 
     def register_agent(self, agent):
         self.agents.append(agent)
@@ -13,36 +17,30 @@ class Orchestrator:
         }
 
     def route(self, request, context=None):
-        """Route a request to the most appropriate DevOps agent."""
+        """Use the DecisionEngine to route a request to an agent."""
 
         if not request:
             raise ValueError("Request cannot be empty")
 
-        request_lower = request.lower()
+        decision = self.decision_engine.decide_agents(request)
 
-        routing_rules = {
-            "jira": ["jira", "ticket", "issue", "kan-"],
-            "github": ["github", "repository", "repo", "pull request", "commit"],
-            "docker": ["docker", "container", "image", "build"],
-            "terraform": ["terraform", "infrastructure", "tf", "plan"],
-            "kubernetes": ["kubernetes", "k8s", "pod", "deployment", "cluster"],
-            "ansible": ["ansible", "playbook", "configuration"],
-            "monitoring": ["monitor", "monitoring", "health", "metrics", "alert"],
-        }
-
-        selected_agent = None
-
-        for agent_name, keywords in routing_rules.items():
-            if any(keyword in request_lower for keyword in keywords):
-                selected_agent = agent_name
-                break
-
-        if selected_agent is None:
+        if not decision["matched"]:
             return {
                 "status": "no_route",
                 "request": request,
-                "message": "No suitable agent found"
+                "message": "No suitable agent found",
             }
+
+        recommended_agents = decision["recommended_agents"]
+
+        if not recommended_agents:
+            return {
+                "status": "no_route",
+                "request": request,
+                "message": "No suitable agent found",
+            }
+
+        selected_agent = recommended_agents[0]
 
         for agent in self.agents:
             if agent.name.lower() == selected_agent:
@@ -50,12 +48,12 @@ class Orchestrator:
                     "status": "routed",
                     "request": request,
                     "agent": agent.name,
-                    "result": agent.execute(context)
+                    "result": agent.execute(context),
                 }
 
         return {
             "status": "agent_unavailable",
             "request": request,
             "agent": selected_agent,
-            "message": f"{selected_agent} agent is not registered"
+            "message": f"{selected_agent} agent is not registered",
         }

@@ -3,18 +3,42 @@ from src.policy.decision_policy import DecisionPolicy
 from src.safety.guardrails import SafetyGuardrails
 from src.approval.approval_manager import ApprovalManager
 from src.audit.audit_logger import AuditLogger
+from src.persistence.database import Database
 
 
 class Orchestrator:
-    def __init__(self):
+    def __init__(self, database=None):
+        """
+        Main orchestration layer for the Autonomous DevOps Platform.
+
+        A shared Database instance can be supplied so approvals,
+        executions, and audit events persist across the platform.
+        """
+
         self.agents = []
+
+        # ---------------------------------------------------------
+        # PERSISTENCE
+        # ---------------------------------------------------------
+        self.database = database or Database()
+
+        # ---------------------------------------------------------
+        # PLATFORM COMPONENTS
+        # ---------------------------------------------------------
         self.decision_engine = DecisionEngine()
         self.decision_policy = DecisionPolicy()
         self.safety_guardrails = SafetyGuardrails()
-        self.approval_manager = ApprovalManager()
-        self.audit_logger = AuditLogger()
+
+        self.approval_manager = ApprovalManager(
+            database=self.database
+        )
+
+        self.audit_logger = AuditLogger(
+            database=self.database
+        )
 
     def register_agent(self, agent):
+        """Register an agent with the orchestrator."""
         self.agents.append(agent)
 
     def run(self, context=None):
@@ -72,6 +96,7 @@ class Orchestrator:
         -> SafetyGuardrails
         -> Human Approval
         -> Agent Execution
+        -> Persistence
         -> Audit Logging
         """
 
@@ -163,7 +188,10 @@ class Orchestrator:
         # ---------------------------------------------------------
         # 5. HUMAN APPROVAL
         # ---------------------------------------------------------
-        if self._requires_human_approval(request, safety_result):
+        if self._requires_human_approval(
+            request,
+            safety_result,
+        ):
 
             # No approval exists yet
             if approval_id is None:
@@ -197,11 +225,15 @@ class Orchestrator:
                     "agent": selected_agent,
                     "risk": risk,
                     "approval_id": approval["approval_id"],
-                    "message": "Human approval required before execution",
+                    "message": (
+                        "Human approval required before execution"
+                    ),
                 }
 
             # Approval ID supplied
-            approval = self.approval_manager.get_request(approval_id)
+            approval = self.approval_manager.get_request(
+                approval_id
+            )
 
             if approval is None:
                 return {
@@ -209,7 +241,9 @@ class Orchestrator:
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
-                    "message": "Approval request was not found",
+                    "message": (
+                        "Approval request was not found"
+                    ),
                 }
 
             if approval["status"] == "pending":
@@ -229,11 +263,15 @@ class Orchestrator:
                     agent=selected_agent,
                     allowed=False,
                     risk=risk,
-                    reason=approval.get("reason")
-                    or "Human rejected request",
+                    reason=(
+                        approval.get("reason")
+                        or "Human rejected request"
+                    ),
                     metadata={
                         "approval_id": approval_id,
-                        "decided_by": approval.get("decided_by"),
+                        "decided_by": approval.get(
+                            "decided_by"
+                        ),
                     },
                 )
 
@@ -242,16 +280,22 @@ class Orchestrator:
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
-                    "message": "Human approval was rejected",
+                    "message": (
+                        "Human approval was rejected"
+                    ),
                 }
 
-            if not self.approval_manager.can_execute(approval_id):
+            if not self.approval_manager.can_execute(
+                approval_id
+            ):
                 return {
                     "status": "pending_approval",
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
-                    "message": "Request is not approved for execution",
+                    "message": (
+                        "Request is not approved for execution"
+                    ),
                 }
 
         # ---------------------------------------------------------
@@ -260,29 +304,66 @@ class Orchestrator:
         for agent in self.agents:
             if agent.name.lower() == selected_agent:
 
-                result = agent.execute(context)
+                try:
+                    result = agent.execute(context)
 
-                self.audit_logger.log(
-                    request=request,
-                    action="execute",
-                    agent=agent.name,
-                    allowed=True,
-                    risk=risk,
-                    reason="Request executed successfully",
-                    metadata={
-                        "decision": decision,
-                        "policy": policy_result,
-                        "safety": safety_result,
-                        "approval_id": approval_id,
-                    },
-                )
+                    # Persist successful execution
+                    self.database.save_execution(
+                        request=request,
+                        agent=agent.name,
+                        status="success",
+                        result=result,
+                    )
 
-                return {
-                    "status": "routed",
-                    "request": request,
-                    "agent": agent.name,
-                    "result": result,
-                }
+                    self.audit_logger.log(
+                        request=request,
+                        action="execute",
+                        agent=agent.name,
+                        allowed=True,
+                        risk=risk,
+                        reason="Request executed successfully",
+                        metadata={
+                            "decision": decision,
+                            "policy": policy_result,
+                            "safety": safety_result,
+                            "approval_id": approval_id,
+                        },
+                    )
+
+                    return {
+                        "status": "routed",
+                        "request": request,
+                        "agent": agent.name,
+                        "result": result,
+                    }
+
+                except Exception as exc:
+                    # Persist failed execution
+                    self.database.save_execution(
+                        request=request,
+                        agent=agent.name,
+                        status="failed",
+                        result={
+                            "error": str(exc),
+                        },
+                    )
+
+                    self.audit_logger.log(
+                        request=request,
+                        action="execution_failed",
+                        agent=agent.name,
+                        allowed=False,
+                        risk=risk,
+                        reason=str(exc),
+                        metadata={
+                            "decision": decision,
+                            "policy": policy_result,
+                            "safety": safety_result,
+                            "approval_id": approval_id,
+                        },
+                    )
+
+                    raise
 
         # ---------------------------------------------------------
         # 7. AGENT RECOMMENDED BUT NOT REGISTERED
@@ -293,12 +374,31 @@ class Orchestrator:
             agent=selected_agent,
             allowed=False,
             risk=risk,
-            reason=f"{selected_agent} agent is not registered",
+            reason=(
+                f"{selected_agent} agent is not registered"
+            ),
         )
 
         return {
             "status": "agent_unavailable",
             "request": request,
             "agent": selected_agent,
-            "message": f"{selected_agent} agent is not registered",
+            "message": (
+                f"{selected_agent} agent is not registered"
+            ),
         }
+
+    def close(self):
+        """Close platform resources."""
+        self.database.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(
+        self,
+        exc_type,
+        exc_value,
+        traceback,
+    ):
+        self.close()

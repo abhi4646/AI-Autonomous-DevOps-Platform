@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import uuid
+
+from src.persistence.database import Database
 
 
 class AuditLogger:
@@ -9,8 +11,12 @@ class AuditLogger:
     and agent executions.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        database: Optional[Database] = None,
+    ):
         self.events: List[Dict[str, Any]] = []
+        self.database = database
 
     def log(
         self,
@@ -25,7 +31,9 @@ class AuditLogger:
 
         event = {
             "event_id": str(uuid.uuid4()),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(
+                timezone.utc
+            ).isoformat(),
             "request": request,
             "action": action,
             "agent": agent,
@@ -36,6 +44,20 @@ class AuditLogger:
         }
 
         self.events.append(event)
+
+        if self.database is not None:
+            self.database.save_audit_event(
+                event_type=action,
+                message=reason or action,
+                metadata={
+                    "event_id": event["event_id"],
+                    "request": request,
+                    "agent": agent,
+                    "allowed": allowed,
+                    "risk": risk,
+                    "metadata": event["metadata"],
+                },
+            )
 
         return event
 

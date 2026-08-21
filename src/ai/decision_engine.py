@@ -32,13 +32,17 @@ class DecisionEngine:
             "cloud",
             "tf",
             "plan",
+            "apply",
         ],
         "kubernetes": [
             "kubernetes",
             "k8s",
             "pod",
             "deployment",
+            "deploy",
             "cluster",
+            "service",
+            "namespace",
         ],
         "ansible": [
             "ansible",

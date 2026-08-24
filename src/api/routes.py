@@ -2,13 +2,19 @@ import os
 
 from fastapi import APIRouter, HTTPException, status
 
+from src.ansible.agent import AnsibleAgent
 from src.api.models import (
     ApprovalDecision,
     ExecuteRequest,
 )
+from src.docker.agent import DockerAgent
+from src.github.agent import GitHubAgent
+from src.jira.agent import JiraAgent
 from src.kubernetes.agent import KubernetesAgent
+from src.monitoring.agent import MonitoringAgent
 from src.orchestrator.orchestrator import Orchestrator
 from src.persistence.database import Database
+from src.terraform.agent import TerraformAgent
 
 
 router = APIRouter(
@@ -45,15 +51,33 @@ orchestrator = Orchestrator(
 # REGISTER DEVOPS AGENTS
 # ---------------------------------------------------------
 
-kubernetes_agent = KubernetesAgent()
+# DecisionEngine routes requests using these lowercase keys:
+#
+# ansible
+# docker
+# github
+# jira
+# kubernetes
+# monitoring
+# terraform
+#
+# Individual agent classes use human-readable display names,
+# so normalize their names to the routing keys before
+# registering them with the orchestrator.
 
-# DecisionEngine routes using "kubernetes".
-# Match the registered agent name to that routing key.
-kubernetes_agent.name = "kubernetes"
+agents = [
+    ("ansible", AnsibleAgent()),
+    ("docker", DockerAgent()),
+    ("github", GitHubAgent()),
+    ("jira", JiraAgent()),
+    ("kubernetes", KubernetesAgent()),
+    ("monitoring", MonitoringAgent()),
+    ("terraform", TerraformAgent()),
+]
 
-orchestrator.register_agent(
-    kubernetes_agent
-)
+for routing_name, agent in agents:
+    agent.name = routing_name
+    orchestrator.register_agent(agent)
 
 
 # ---------------------------------------------------------

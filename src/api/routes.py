@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException, status
 
 from src.api.models import (
@@ -19,7 +21,20 @@ router = APIRouter(
 # PLATFORM DEPENDENCIES
 # ---------------------------------------------------------
 
-database = Database()
+# Normal application:
+#     data/devops_platform.db
+#
+# Tests can override this using:
+#     DEVOPS_DB_PATH
+#
+# This prevents pytest from writing fake test data into
+# the real development database.
+database_path = os.getenv(
+    "DEVOPS_DB_PATH",
+    "data/devops_platform.db",
+)
+
+database = Database(database_path)
 
 orchestrator = Orchestrator(
     database=database,
@@ -32,9 +47,8 @@ orchestrator = Orchestrator(
 
 kubernetes_agent = KubernetesAgent()
 
-# The DecisionEngine returns the routing key "kubernetes".
-# The existing KubernetesAgent display name is "Kubernetes Agent",
-# so use the routing-compatible name when registering it.
+# DecisionEngine routes using "kubernetes".
+# Match the registered agent name to that routing key.
 kubernetes_agent.name = "kubernetes"
 
 orchestrator.register_agent(

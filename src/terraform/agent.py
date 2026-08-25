@@ -7,7 +7,10 @@ class TerraformAgent(BaseAgent):
     def __init__(self):
         super().__init__("Terraform Agent")
 
-    def plan(self):
+    def plan(
+        self,
+        request="CLI command execution",
+    ):
         init_command = [
             "terraform",
             f"-chdir={settings.terraform_working_dir}",
@@ -31,8 +34,10 @@ class TerraformAgent(BaseAgent):
 
         init_result = run_command(
             init_command,
-            timeout=300,
-            output_limit=2000,
+            timeout=180,
+            output_limit=1500,
+            request=request,
+            agent=self.name,
         )
 
         if init_result["status"] != "success":
@@ -46,6 +51,8 @@ class TerraformAgent(BaseAgent):
             plan_command,
             timeout=300,
             output_limit=2000,
+            request=request,
+            agent=self.name,
         )
 
         return {
@@ -55,6 +62,16 @@ class TerraformAgent(BaseAgent):
         }
 
     def execute(self, context=None):
+        request = "CLI command execution"
+
+        if isinstance(context, dict):
+            request = context.get(
+                "request",
+                request,
+            )
+
         return {
-            "terraform": self.plan()
+            "terraform": self.plan(
+                request=request
+            )
         }

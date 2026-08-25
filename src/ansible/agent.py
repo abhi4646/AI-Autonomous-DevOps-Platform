@@ -1,46 +1,48 @@
-import subprocess
-
 from src.agents import BaseAgent
 from src.core.config import settings
+from src.core.execution import run_command
 
 
 class AnsibleAgent(BaseAgent):
     def __init__(self):
         super().__init__("Ansible Agent")
 
-    def run_playbook(self):
+    def run_playbook(
+        self,
+        request="CLI command execution",
+    ):
+        command = [
+            "ansible-playbook",
+            "-i",
+            settings.ansible_inventory_path,
+            settings.ansible_playbook_path,
+        ]
+
         if settings.app_mode == "dry_run":
             return {
                 "status": "dry_run",
-                "command": (
-                    f"ansible-playbook -i "
-                    f"{settings.ansible_inventory_path} "
-                    f"{settings.ansible_playbook_path}"
-                ),
+                "command": command,
             }
 
-        r = subprocess.run(
-            [
-                "ansible-playbook",
-                "-i",
-                settings.ansible_inventory_path,
-                settings.ansible_playbook_path,
-            ],
-            capture_output=True,
-            text=True,
+        return run_command(
+            command,
+            timeout=300,
+            output_limit=1500,
+            request=request,
+            agent=self.name,
         )
 
-        return {
-            "status": (
-                "success"
-                if r.returncode == 0
-                else "failed"
-            ),
-            "stdout": r.stdout[-1500:],
-            "stderr": r.stderr[-1500:],
-        }
-
     def execute(self, context=None):
+        request = "CLI command execution"
+
+        if isinstance(context, dict):
+            request = context.get(
+                "request",
+                request,
+            )
+
         return {
-            "ansible": self.run_playbook()
+            "ansible": self.run_playbook(
+                request=request
+            )
         }

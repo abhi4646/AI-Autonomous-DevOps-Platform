@@ -48,17 +48,29 @@ class Orchestrator:
             for agent in self.agents
         }
 
-    def _requires_human_approval(self, request, safety_result):
+    def _requires_human_approval(
+        self,
+        request,
+        safety_result,
+    ):
         """
-        Require human approval only for operations that can modify systems.
+        Require human approval only for operations
+        that can modify systems.
 
         Read/check/inspect operations should continue normally.
-        Destructive operations are handled earlier by SafetyGuardrails.
+        Destructive operations are handled earlier by
+        SafetyGuardrails.
         """
 
-        action = safety_result.get("action", "execute")
+        action = safety_result.get(
+            "action",
+            "execute",
+        )
 
-        if action not in {"review", "escalate"}:
+        if action not in {
+            "review",
+            "escalate",
+        }:
             return False
 
         request_lower = request.lower()
@@ -87,7 +99,12 @@ class Orchestrator:
             for keyword in approval_keywords
         )
 
-    def route(self, request, context=None, approval_id=None):
+    def route(
+        self,
+        request,
+        context=None,
+        approval_id=None,
+    ):
         """
         Route a request through:
 
@@ -101,12 +118,17 @@ class Orchestrator:
         """
 
         if not request:
-            raise ValueError("Request cannot be empty")
+            raise ValueError(
+                "Request cannot be empty"
+            )
 
         # ---------------------------------------------------------
         # 1. AI DECISION
         # ---------------------------------------------------------
-        decision = self.decision_engine.decide_agents(request)
+        decision = (
+            self.decision_engine
+            .decide_agents(request)
+        )
 
         if not decision["matched"]:
             self.audit_logger.log(
@@ -120,10 +142,14 @@ class Orchestrator:
             return {
                 "status": "no_route",
                 "request": request,
-                "message": "No suitable agent found",
+                "message": (
+                    "No suitable agent found"
+                ),
             }
 
-        recommended_agents = decision["recommended_agents"]
+        recommended_agents = (
+            decision["recommended_agents"]
+        )
 
         if not recommended_agents:
             self.audit_logger.log(
@@ -137,27 +163,48 @@ class Orchestrator:
             return {
                 "status": "no_route",
                 "request": request,
-                "message": "No suitable agent found",
+                "message": (
+                    "No suitable agent found"
+                ),
             }
 
-        selected_agent = recommended_agents[0]
+        selected_agent = (
+            recommended_agents[0]
+        )
 
         # ---------------------------------------------------------
         # 2. DECISION POLICY
         # ---------------------------------------------------------
-        policy_result = self.decision_policy.evaluate(decision)
+        policy_result = (
+            self.decision_policy
+            .evaluate(decision)
+        )
 
         # ---------------------------------------------------------
         # 3. SAFETY GUARDRAILS
         # ---------------------------------------------------------
-        safety_result = self.safety_guardrails.evaluate(
-            request,
-            policy_result=policy_result,
+        safety_result = (
+            self.safety_guardrails
+            .evaluate(
+                request,
+                policy_result=policy_result,
+            )
         )
 
-        safety_action = safety_result.get("action", "execute")
-        risk = safety_result.get("risk", "low")
-        reason = safety_result.get("reason", "")
+        safety_action = safety_result.get(
+            "action",
+            "execute",
+        )
+
+        risk = safety_result.get(
+            "risk",
+            "low",
+        )
+
+        reason = safety_result.get(
+            "reason",
+            "",
+        )
 
         # ---------------------------------------------------------
         # 4. HARD SAFETY BLOCK
@@ -193,18 +240,20 @@ class Orchestrator:
             safety_result,
         ):
 
-            # No approval exists yet
             if approval_id is None:
-                approval = self.approval_manager.create_request(
-                    request=request,
-                    action=safety_action,
-                    agent=selected_agent,
-                    risk=risk,
-                    metadata={
-                        "decision": decision,
-                        "policy": policy_result,
-                        "safety": safety_result,
-                    },
+                approval = (
+                    self.approval_manager
+                    .create_request(
+                        request=request,
+                        action=safety_action,
+                        agent=selected_agent,
+                        risk=risk,
+                        metadata={
+                            "decision": decision,
+                            "policy": policy_result,
+                            "safety": safety_result,
+                        },
+                    )
                 )
 
                 self.audit_logger.log(
@@ -215,48 +264,74 @@ class Orchestrator:
                     risk=risk,
                     reason=reason,
                     metadata={
-                        "approval_id": approval["approval_id"],
+                        "approval_id": (
+                            approval[
+                                "approval_id"
+                            ]
+                        ),
                     },
                 )
 
                 return {
-                    "status": "pending_approval",
+                    "status": (
+                        "pending_approval"
+                    ),
                     "request": request,
                     "agent": selected_agent,
                     "risk": risk,
-                    "approval_id": approval["approval_id"],
+                    "approval_id": (
+                        approval[
+                            "approval_id"
+                        ]
+                    ),
                     "message": (
-                        "Human approval required before execution"
+                        "Human approval required "
+                        "before execution"
                     ),
                 }
 
-            # Approval ID supplied
-            approval = self.approval_manager.get_request(
-                approval_id
+            approval = (
+                self.approval_manager
+                .get_request(
+                    approval_id
+                )
             )
 
             if approval is None:
                 return {
-                    "status": "approval_not_found",
+                    "status": (
+                        "approval_not_found"
+                    ),
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
                     "message": (
-                        "Approval request was not found"
+                        "Approval request was "
+                        "not found"
                     ),
                 }
 
-            if approval["status"] == "pending":
+            if (
+                approval["status"]
+                == "pending"
+            ):
                 return {
-                    "status": "pending_approval",
+                    "status": (
+                        "pending_approval"
+                    ),
                     "request": request,
                     "agent": selected_agent,
                     "risk": risk,
                     "approval_id": approval_id,
-                    "message": "Approval is still pending",
+                    "message": (
+                        "Approval is still pending"
+                    ),
                 }
 
-            if approval["status"] == "rejected":
+            if (
+                approval["status"]
+                == "rejected"
+            ):
                 self.audit_logger.log(
                     request=request,
                     action="rejected",
@@ -264,13 +339,22 @@ class Orchestrator:
                     allowed=False,
                     risk=risk,
                     reason=(
-                        approval.get("reason")
-                        or "Human rejected request"
+                        approval.get(
+                            "reason"
+                        )
+                        or (
+                            "Human rejected "
+                            "request"
+                        )
                     ),
                     metadata={
-                        "approval_id": approval_id,
-                        "decided_by": approval.get(
-                            "decided_by"
+                        "approval_id": (
+                            approval_id
+                        ),
+                        "decided_by": (
+                            approval.get(
+                                "decided_by"
+                            )
                         ),
                     },
                 )
@@ -281,20 +365,27 @@ class Orchestrator:
                     "agent": selected_agent,
                     "approval_id": approval_id,
                     "message": (
-                        "Human approval was rejected"
+                        "Human approval was "
+                        "rejected"
                     ),
                 }
 
-            if not self.approval_manager.can_execute(
-                approval_id
+            if not (
+                self.approval_manager
+                .can_execute(
+                    approval_id
+                )
             ):
                 return {
-                    "status": "pending_approval",
+                    "status": (
+                        "pending_approval"
+                    ),
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
                     "message": (
-                        "Request is not approved for execution"
+                        "Request is not approved "
+                        "for execution"
                     ),
                 }
 
@@ -302,10 +393,23 @@ class Orchestrator:
         # 6. LOCATE AND EXECUTE SELECTED AGENT
         # ---------------------------------------------------------
         for agent in self.agents:
-            if agent.name.lower() == selected_agent:
+            if (
+                agent.name.lower()
+                == selected_agent
+            ):
 
                 try:
-                    result = agent.execute(context)
+                    execution_context = dict(
+                        context or {}
+                    )
+
+                    execution_context[
+                        "request"
+                    ] = request
+
+                    result = agent.execute(
+                        execution_context
+                    )
 
                     # Persist successful execution
                     self.database.save_execution(
@@ -321,12 +425,17 @@ class Orchestrator:
                         agent=agent.name,
                         allowed=True,
                         risk=risk,
-                        reason="Request executed successfully",
+                        reason=(
+                            "Request executed "
+                            "successfully"
+                        ),
                         metadata={
                             "decision": decision,
                             "policy": policy_result,
                             "safety": safety_result,
-                            "approval_id": approval_id,
+                            "approval_id": (
+                                approval_id
+                            ),
                         },
                     )
 
@@ -338,7 +447,6 @@ class Orchestrator:
                     }
 
                 except Exception as exc:
-                    # Persist failed execution
                     self.database.save_execution(
                         request=request,
                         agent=agent.name,
@@ -350,7 +458,9 @@ class Orchestrator:
 
                     self.audit_logger.log(
                         request=request,
-                        action="execution_failed",
+                        action=(
+                            "execution_failed"
+                        ),
                         agent=agent.name,
                         allowed=False,
                         risk=risk,
@@ -359,7 +469,9 @@ class Orchestrator:
                             "decision": decision,
                             "policy": policy_result,
                             "safety": safety_result,
-                            "approval_id": approval_id,
+                            "approval_id": (
+                                approval_id
+                            ),
                         },
                     )
 
@@ -375,7 +487,8 @@ class Orchestrator:
             allowed=False,
             risk=risk,
             reason=(
-                f"{selected_agent} agent is not registered"
+                f"{selected_agent} agent "
+                f"is not registered"
             ),
         )
 
@@ -384,7 +497,8 @@ class Orchestrator:
             "request": request,
             "agent": selected_agent,
             "message": (
-                f"{selected_agent} agent is not registered"
+                f"{selected_agent} agent "
+                f"is not registered"
             ),
         }
 

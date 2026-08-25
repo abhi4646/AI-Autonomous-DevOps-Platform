@@ -350,6 +350,166 @@ class Database:
             for row in cursor.fetchall()
         ]
 
+    # ---------------------------------------------------------
+    # EXECUTION METRICS
+    # ---------------------------------------------------------
+
+    def get_execution_metrics(self) -> dict:
+        """
+        Return aggregate metrics derived from persisted
+        execution telemetry.
+        """
+
+        executions = self.get_executions()
+
+        total_executions = len(executions)
+
+        successful_statuses = {
+            "success",
+            "routed",
+        }
+
+        failed_statuses = {
+            "failed",
+            "failure",
+            "error",
+            "timeout",
+            "unavailable",
+            "blocked",
+        }
+
+        successful_executions = 0
+        failed_executions = 0
+
+        status_counts = {}
+        agent_activity = {}
+        durations = []
+        recent_failures = []
+
+        for execution in executions:
+            execution_status = (
+                execution.get("status")
+                or "unknown"
+            )
+
+            agent = (
+                execution.get("agent")
+                or "unknown"
+            )
+
+            status_counts[execution_status] = (
+                status_counts.get(
+                    execution_status,
+                    0,
+                )
+                + 1
+            )
+
+            agent_activity[agent] = (
+                agent_activity.get(
+                    agent,
+                    0,
+                )
+                + 1
+            )
+
+            if execution_status in successful_statuses:
+                successful_executions += 1
+
+            if execution_status in failed_statuses:
+                failed_executions += 1
+
+                recent_failures.append(
+                    {
+                        "execution_id": execution.get(
+                            "execution_id"
+                        ),
+                        "request": execution.get(
+                            "request"
+                        ),
+                        "agent": agent,
+                        "status": execution_status,
+                        "error": execution.get(
+                            "error"
+                        ),
+                        "created_at": execution.get(
+                            "created_at"
+                        ),
+                    }
+                )
+
+            duration_ms = execution.get(
+                "duration_ms"
+            )
+
+            if isinstance(
+                duration_ms,
+                (int, float),
+            ):
+                durations.append(
+                    duration_ms
+                )
+
+        success_rate = (
+            round(
+                (
+                    successful_executions
+                    / total_executions
+                )
+                * 100,
+                2,
+            )
+            if total_executions
+            else 0.0
+        )
+
+        failure_rate = (
+            round(
+                (
+                    failed_executions
+                    / total_executions
+                )
+                * 100,
+                2,
+            )
+            if total_executions
+            else 0.0
+        )
+
+        average_duration_ms = (
+            round(
+                sum(durations)
+                / len(durations),
+                2,
+            )
+            if durations
+            else 0.0
+        )
+
+        recent_failures = (
+            recent_failures[-10:]
+        )
+
+        recent_failures.reverse()
+
+        return {
+            "total_executions": total_executions,
+            "successful_executions": (
+                successful_executions
+            ),
+            "failed_executions": (
+                failed_executions
+            ),
+            "success_rate": success_rate,
+            "failure_rate": failure_rate,
+            "average_duration_ms": (
+                average_duration_ms
+            ),
+            "status_counts": status_counts,
+            "agent_activity": agent_activity,
+            "recent_failures": recent_failures,
+        }
+
     def get_execution(
         self,
         execution_id: str,

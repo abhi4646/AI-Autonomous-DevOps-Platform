@@ -11,19 +11,25 @@ class Database:
 
     Stores:
     - agent executions
+    - execution telemetry
     - approval requests
     - audit events
 
-    SQLite is used for the initial implementation so the platform
-    can run locally without requiring an external database service.
+    Existing databases are migrated automatically when new
+    execution telemetry columns are introduced.
     """
 
-    def __init__(self, db_path: str = "data/devops_platform.db"):
+    def __init__(
+        self,
+        db_path: str = "data/devops_platform.db",
+    ):
         self.db_path = db_path
 
-        # Special SQLite in-memory database
         if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(db_path).parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
         self.connection = sqlite3.connect(
             db_path,
@@ -32,15 +38,32 @@ class Database:
 
         self.connection.row_factory = sqlite3.Row
 
+        # Order is important:
+        # 1. Create tables
+        # 2. Migrate legacy execution tables
+        # 3. Create indexes that depend on migrated columns
         self._create_tables()
+        self._migrate_execution_table()
+        self._create_indexes()
 
     @staticmethod
     def _timestamp() -> str:
-        """Return a UTC ISO-8601 timestamp."""
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(
+            timezone.utc
+        ).isoformat()
+
+    # ---------------------------------------------------------
+    # DATABASE INITIALIZATION
+    # ---------------------------------------------------------
 
     def _create_tables(self) -> None:
-        """Create database tables if they do not already exist."""
+        """
+        Create base database tables.
+
+        Existing tables are left intact by SQLite. Any missing
+        execution telemetry columns are added by the migration
+        method after this method completes.
+        """
 
         cursor = self.connection.cursor()
 
@@ -52,7 +75,14 @@ class Database:
                 agent TEXT NOT NULL,
                 status TEXT NOT NULL,
                 result TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                execution_id TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                duration_ms REAL,
+                command TEXT,
+                error TEXT,
+                telemetry_metadata TEXT
             )
             """
         )
@@ -86,6 +116,117 @@ class Database:
 
         self.connection.commit()
 
+    def _migrate_execution_table(self) -> None:
+        """
+        Upgrade an existing legacy executions table without
+        deleting or replacing existing execution records.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            "PRAGMA table_info(executions)"
+        )
+
+        existing_columns = {
+            row["name"]
+            for row in cursor.fetchall()
+        }
+
+        required_columns = {
+            "execution_id": "TEXT",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "duration_ms": "REAL",
+            "command": "TEXT",
+            "error": "TEXT",
+            "telemetry_metadata": "TEXT",
+        }
+
+        for (
+            column_name,
+            column_type,
+        ) in required_columns.items():
+            if column_name not in existing_columns:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE executions
+                    ADD COLUMN {column_name} {column_type}
+                    """
+                )
+
+        self.connection.commit()
+
+    def _create_indexes(self) -> None:
+        """
+        Create indexes after migrations have completed.
+
+        execution_id may not exist in a legacy database until
+        _migrate_execution_table() has run.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_executions_execution_id
+            ON executions(execution_id)
+            """
+        )
+
+        self.connection.commit()
+
+    # ---------------------------------------------------------
+    # SERIALIZATION HELPERS
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _serialize(
+        value: Optional[Any],
+    ) -> Optional[str]:
+        if value is None:
+            return None
+
+        return json.dumps(value)
+
+    @staticmethod
+    def _deserialize(
+        value: Optional[str],
+    ) -> Optional[Any]:
+        if value is None:
+            return None
+
+        return json.loads(value)
+
+    def _deserialize_execution(
+        self,
+        row,
+    ) -> dict:
+        item = dict(row)
+
+        if item.get("result") is not None:
+            item["result"] = self._deserialize(
+                item["result"]
+            )
+
+        if item.get("command") is not None:
+            item["command"] = self._deserialize(
+                item["command"]
+            )
+
+        if (
+            item.get("telemetry_metadata")
+            is not None
+        ):
+            item["telemetry_metadata"] = (
+                self._deserialize(
+                    item["telemetry_metadata"]
+                )
+            )
+
+        return item
+
     # ---------------------------------------------------------
     # EXECUTIONS
     # ---------------------------------------------------------
@@ -96,15 +237,57 @@ class Database:
         agent: str,
         status: str,
         result: Optional[Any] = None,
+        telemetry: Optional[dict] = None,
     ) -> int:
-        """Persist an agent execution."""
+        """
+        Persist an agent execution.
+
+        telemetry is optional so older callers that only provide
+        request, agent, status, and result remain compatible.
+        """
 
         cursor = self.connection.cursor()
 
-        serialized_result = (
-            json.dumps(result)
-            if result is not None
-            else None
+        telemetry = telemetry or {}
+
+        execution_id = telemetry.get(
+            "execution_id"
+        )
+
+        started_at = telemetry.get(
+            "started_at"
+        )
+
+        finished_at = telemetry.get(
+            "finished_at"
+        )
+
+        duration_ms = telemetry.get(
+            "duration_ms"
+        )
+
+        command = telemetry.get(
+            "command"
+        )
+
+        error = telemetry.get(
+            "error"
+        )
+
+        telemetry_metadata = telemetry.get(
+            "metadata"
+        )
+
+        serialized_result = self._serialize(
+            result
+        )
+
+        serialized_command = self._serialize(
+            command
+        )
+
+        serialized_metadata = self._serialize(
+            telemetry_metadata
         )
 
         cursor.execute(
@@ -114,9 +297,18 @@ class Database:
                 agent,
                 status,
                 result,
-                created_at
+                created_at,
+                execution_id,
+                started_at,
+                finished_at,
+                duration_ms,
+                command,
+                error,
+                telemetry_metadata
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
             """,
             (
                 request,
@@ -124,6 +316,13 @@ class Database:
                 status,
                 serialized_result,
                 self._timestamp(),
+                execution_id,
+                started_at,
+                finished_at,
+                duration_ms,
+                serialized_command,
+                error,
+                serialized_metadata,
             ),
         )
 
@@ -132,7 +331,9 @@ class Database:
         return cursor.lastrowid
 
     def get_executions(self) -> list[dict]:
-        """Return all stored executions."""
+        """
+        Return all stored executions.
+        """
 
         cursor = self.connection.cursor()
 
@@ -144,19 +345,40 @@ class Database:
             """
         )
 
-        rows = cursor.fetchall()
+        return [
+            self._deserialize_execution(row)
+            for row in cursor.fetchall()
+        ]
 
-        results = []
+    def get_execution(
+        self,
+        execution_id: str,
+    ) -> Optional[dict]:
+        """
+        Retrieve an execution using its telemetry execution ID.
+        """
 
-        for row in rows:
-            item = dict(row)
+        cursor = self.connection.cursor()
 
-            if item["result"] is not None:
-                item["result"] = json.loads(item["result"])
+        cursor.execute(
+            """
+            SELECT *
+            FROM executions
+            WHERE execution_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (execution_id,),
+        )
 
-            results.append(item)
+        row = cursor.fetchone()
 
-        return results
+        if row is None:
+            return None
+
+        return self._deserialize_execution(
+            row
+        )
 
     # ---------------------------------------------------------
     # APPROVALS
@@ -170,7 +392,9 @@ class Database:
         risk_level: str,
         status: str = "pending",
     ) -> None:
-        """Persist an approval request."""
+        """
+        Persist an approval request.
+        """
 
         cursor = self.connection.cursor()
 
@@ -204,7 +428,9 @@ class Database:
         status: str,
         decided_by: str,
     ) -> None:
-        """Update an existing approval decision."""
+        """
+        Update an existing approval decision.
+        """
 
         cursor = self.connection.cursor()
 
@@ -227,7 +453,8 @@ class Database:
 
         if cursor.rowcount == 0:
             raise KeyError(
-                f"Approval request '{approval_id}' does not exist"
+                f"Approval request "
+                f"'{approval_id}' does not exist"
             )
 
         self.connection.commit()
@@ -236,7 +463,9 @@ class Database:
         self,
         approval_id: str,
     ) -> Optional[dict]:
-        """Retrieve one approval request."""
+        """
+        Retrieve one approval request.
+        """
 
         cursor = self.connection.cursor()
 
@@ -256,8 +485,12 @@ class Database:
 
         return dict(row)
 
-    def get_pending_approvals(self) -> list[dict]:
-        """Return all pending approval requests."""
+    def get_pending_approvals(
+        self,
+    ) -> list[dict]:
+        """
+        Return pending approval requests.
+        """
 
         cursor = self.connection.cursor()
 
@@ -285,14 +518,14 @@ class Database:
         message: str,
         metadata: Optional[dict] = None,
     ) -> int:
-        """Persist an audit event."""
+        """
+        Persist an audit event.
+        """
 
         cursor = self.connection.cursor()
 
-        serialized_metadata = (
-            json.dumps(metadata)
-            if metadata is not None
-            else None
+        serialized_metadata = self._serialize(
+            metadata
         )
 
         cursor.execute(
@@ -317,8 +550,12 @@ class Database:
 
         return cursor.lastrowid
 
-    def get_audit_events(self) -> list[dict]:
-        """Return stored audit events."""
+    def get_audit_events(
+        self,
+    ) -> list[dict]:
+        """
+        Return stored audit events.
+        """
 
         cursor = self.connection.cursor()
 
@@ -338,8 +575,10 @@ class Database:
             event = dict(row)
 
             if event["metadata"] is not None:
-                event["metadata"] = json.loads(
-                    event["metadata"]
+                event["metadata"] = (
+                    self._deserialize(
+                        event["metadata"]
+                    )
                 )
 
             events.append(event)
@@ -351,7 +590,9 @@ class Database:
     # ---------------------------------------------------------
 
     def close(self) -> None:
-        """Close the SQLite connection."""
+        """
+        Close the SQLite connection.
+        """
 
         self.connection.close()
 

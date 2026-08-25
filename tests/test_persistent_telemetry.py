@@ -7,10 +7,7 @@ def test_execution_table_has_telemetry_columns():
     db = Database(":memory:")
 
     cursor = db.connection.cursor()
-
-    cursor.execute(
-        "PRAGMA table_info(executions)"
-    )
+    cursor.execute("PRAGMA table_info(executions)")
 
     columns = {
         row["name"]
@@ -32,9 +29,7 @@ def test_execution_table_has_telemetry_columns():
     db.close()
 
 
-def test_existing_execution_table_is_migrated(
-    tmp_path,
-):
+def test_existing_execution_table_is_migrated(tmp_path):
     db_path = tmp_path / "legacy.db"
 
     connection = sqlite3.connect(db_path)
@@ -78,10 +73,7 @@ def test_existing_execution_table_is_migrated(
     db = Database(str(db_path))
 
     cursor = db.connection.cursor()
-
-    cursor.execute(
-        "PRAGMA table_info(executions)"
-    )
+    cursor.execute("PRAGMA table_info(executions)")
 
     columns = {
         row["name"]

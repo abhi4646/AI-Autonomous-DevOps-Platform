@@ -142,6 +142,28 @@ def get_executions():
 
 
 # ---------------------------------------------------------
+# METRICS
+# ---------------------------------------------------------
+
+@router.get("/metrics")
+def get_metrics():
+    """
+    Return aggregate execution metrics.
+
+    Includes:
+    - total executions
+    - success and failure counts
+    - success and failure rates
+    - average execution duration
+    - per-status counts
+    - per-agent activity
+    - recent failures
+    """
+
+    return database.get_execution_metrics()
+
+
+# ---------------------------------------------------------
 # AUDIT EVENTS
 # ---------------------------------------------------------
 

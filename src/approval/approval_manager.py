@@ -10,13 +10,20 @@ from src.persistence.database import Database
 class ApprovalManager:
     """Manages human approval for AI-generated DevOps actions."""
 
-    VALID_DECISIONS = {"approved", "rejected"}
+    VALID_DECISIONS = {
+        "approved",
+        "rejected",
+    }
 
     def __init__(
         self,
         database: Optional[Database] = None,
     ) -> None:
-        self.approvals: Dict[str, Dict[str, Any]] = {}
+        self.approvals: Dict[
+            str,
+            Dict[str, Any],
+        ] = {}
+
         self.database = database
 
     def create_request(
@@ -25,9 +32,17 @@ class ApprovalManager:
         action: str,
         agent: str,
         risk: str = "medium",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[
+            Dict[str, Any]
+        ] = None,
     ) -> Dict[str, Any]:
-        approval_id = str(uuid4())
+        """
+        Create a new pending approval request.
+        """
+
+        approval_id = str(
+            uuid4()
+        )
 
         approval = {
             "approval_id": approval_id,
@@ -36,14 +51,21 @@ class ApprovalManager:
             "agent": agent,
             "risk": risk,
             "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
             "decided_at": None,
             "decided_by": None,
             "reason": None,
-            "metadata": metadata or {},
+            "metadata": (
+                metadata
+                or {}
+            ),
         }
 
-        self.approvals[approval_id] = approval
+        self.approvals[
+            approval_id
+        ] = approval
 
         if self.database is not None:
             self.database.save_approval(
@@ -52,6 +74,11 @@ class ApprovalManager:
                 agent=agent,
                 risk_level=risk,
                 status="pending",
+                action=action,
+                metadata=(
+                    metadata
+                    or {}
+                ),
             )
 
         return approval.copy()
@@ -59,61 +86,186 @@ class ApprovalManager:
     def get_request(
         self,
         approval_id: str,
-    ) -> Optional[Dict[str, Any]]:
-        approval = self.approvals.get(approval_id)
+    ) -> Optional[
+        Dict[str, Any]
+    ]:
+        """
+        Retrieve an approval from memory or persistent storage.
+        """
+
+        approval = self.approvals.get(
+            approval_id
+        )
 
         if approval is not None:
             return approval.copy()
 
         if self.database is not None:
-            stored = self.database.get_approval(approval_id)
+            stored = (
+                self.database
+                .get_approval(
+                    approval_id
+                )
+            )
 
             if stored is not None:
                 restored = {
-                    "approval_id": stored["approval_id"],
-                    "request": stored["request"],
-                    "action": "review",
-                    "agent": stored["agent"],
-                    "risk": stored["risk_level"],
-                    "status": stored["status"],
-                    "created_at": stored["created_at"],
-                    "decided_at": stored["decided_at"],
-                    "decided_by": stored["decided_by"],
-                    "reason": None,
-                    "metadata": {},
+                    "approval_id": (
+                        stored[
+                            "approval_id"
+                        ]
+                    ),
+                    "request": (
+                        stored[
+                            "request"
+                        ]
+                    ),
+                    "action": (
+                        stored.get(
+                            "action"
+                        )
+                        or "review"
+                    ),
+                    "agent": (
+                        stored[
+                            "agent"
+                        ]
+                    ),
+                    "risk": (
+                        stored[
+                            "risk_level"
+                        ]
+                    ),
+                    "status": (
+                        stored[
+                            "status"
+                        ]
+                    ),
+                    "created_at": (
+                        stored[
+                            "created_at"
+                        ]
+                    ),
+                    "decided_at": (
+                        stored[
+                            "decided_at"
+                        ]
+                    ),
+                    "decided_by": (
+                        stored[
+                            "decided_by"
+                        ]
+                    ),
+                    "reason": (
+                        stored.get(
+                            "reason"
+                        )
+                    ),
+                    "metadata": (
+                        stored.get(
+                            "approval_metadata"
+                        )
+                        or {}
+                    ),
                 }
 
-                self.approvals[approval_id] = restored
+                self.approvals[
+                    approval_id
+                ] = restored
 
                 return restored.copy()
 
         return None
 
-    def get_pending(self) -> List[Dict[str, Any]]:
+    def get_pending(
+        self,
+    ) -> List[
+        Dict[str, Any]
+    ]:
+        """
+        Return pending approvals.
+        """
+
         if self.database is not None:
-            stored_pending = self.database.get_pending_approvals()
+            stored_pending = (
+                self.database
+                .get_pending_approvals()
+            )
 
             return [
                 {
-                    "approval_id": item["approval_id"],
-                    "request": item["request"],
-                    "action": "review",
-                    "agent": item["agent"],
-                    "risk": item["risk_level"],
-                    "status": item["status"],
-                    "created_at": item["created_at"],
-                    "decided_at": item["decided_at"],
-                    "decided_by": item["decided_by"],
-                    "reason": None,
-                    "metadata": {},
+                    "approval_id": (
+                        item[
+                            "approval_id"
+                        ]
+                    ),
+                    "request": (
+                        item[
+                            "request"
+                        ]
+                    ),
+                    "action": (
+                        item.get(
+                            "action"
+                        )
+                        or "review"
+                    ),
+                    "agent": (
+                        item[
+                            "agent"
+                        ]
+                    ),
+                    "risk": (
+                        item[
+                            "risk_level"
+                        ]
+                    ),
+                    "status": (
+                        item[
+                            "status"
+                        ]
+                    ),
+                    "created_at": (
+                        item[
+                            "created_at"
+                        ]
+                    ),
+                    "decided_at": (
+                        item[
+                            "decided_at"
+                        ]
+                    ),
+                    "decided_by": (
+                        item[
+                            "decided_by"
+                        ]
+                    ),
+                    "reason": (
+                        item.get(
+                            "reason"
+                        )
+                    ),
+                    "metadata": (
+                        item.get(
+                            "approval_metadata"
+                        )
+                        or {}
+                    ),
                 }
-                for item in stored_pending
+                for item
+                in stored_pending
             ]
 
         return [
             approval.copy()
-            for approval in self.approvals.values()
-            if approval["status"] == "pending"
+            for approval
+            in self.approvals.values()
+            if (
+                approval[
+                    "status"
+                ]
+                == "pending"
+            )
         ]
 
     def decide(
@@ -121,41 +273,80 @@ class ApprovalManager:
         approval_id: str,
         decision: str,
         decided_by: str,
-        reason: Optional[str] = None,
+        reason: Optional[
+            str
+        ] = None,
     ) -> Dict[str, Any]:
-        approval = self.get_request(approval_id)
+        """
+        Approve or reject an existing approval request.
+        """
+
+        approval = self.get_request(
+            approval_id
+        )
 
         if approval is None:
             raise KeyError(
-                f"Approval request not found: {approval_id}"
+                f"Approval request "
+                f"not found: "
+                f"{approval_id}"
             )
 
-        decision = decision.lower()
+        decision = (
+            decision.lower()
+        )
 
-        if decision not in self.VALID_DECISIONS:
+        if (
+            decision
+            not in
+            self.VALID_DECISIONS
+        ):
             raise ValueError(
-                "Decision must be 'approved' or 'rejected'"
+                "Decision must be "
+                "'approved' or "
+                "'rejected'"
             )
 
-        if approval["status"] != "pending":
+        if (
+            approval[
+                "status"
+            ]
+            != "pending"
+        ):
             raise ValueError(
-                "Approval request has already been decided"
+                "Approval request "
+                "has already been "
+                "decided"
             )
 
-        approval["status"] = decision
-        approval["decided_by"] = decided_by
-        approval["decided_at"] = datetime.now(
+        approval[
+            "status"
+        ] = decision
+
+        approval[
+            "decided_by"
+        ] = decided_by
+
+        approval[
+            "decided_at"
+        ] = datetime.now(
             timezone.utc
         ).isoformat()
-        approval["reason"] = reason
 
-        self.approvals[approval_id] = approval
+        approval[
+            "reason"
+        ] = reason
+
+        self.approvals[
+            approval_id
+        ] = approval
 
         if self.database is not None:
             self.database.update_approval(
                 approval_id=approval_id,
                 status=decision,
                 decided_by=decided_by,
+                reason=reason,
             )
 
         return approval.copy()
@@ -164,7 +355,9 @@ class ApprovalManager:
         self,
         approval_id: str,
         decided_by: str,
-        reason: Optional[str] = None,
+        reason: Optional[
+            str
+        ] = None,
     ) -> Dict[str, Any]:
         return self.decide(
             approval_id,
@@ -177,7 +370,9 @@ class ApprovalManager:
         self,
         approval_id: str,
         decided_by: str,
-        reason: Optional[str] = None,
+        reason: Optional[
+            str
+        ] = None,
     ) -> Dict[str, Any]:
         return self.decide(
             approval_id,
@@ -186,16 +381,35 @@ class ApprovalManager:
             reason,
         )
 
-    def is_approved(self, approval_id: str) -> bool:
-        approval = self.get_request(approval_id)
+    def is_approved(
+        self,
+        approval_id: str,
+    ) -> bool:
+        approval = (
+            self.get_request(
+                approval_id
+            )
+        )
 
         return bool(
             approval
-            and approval["status"] == "approved"
+            and (
+                approval[
+                    "status"
+                ]
+                == "approved"
+            )
         )
 
-    def can_execute(self, approval_id: str) -> bool:
-        return self.is_approved(approval_id)
+    def can_execute(
+        self,
+        approval_id: str,
+    ) -> bool:
+        return self.is_approved(
+            approval_id
+        )
 
-    def clear(self) -> None:
+    def clear(
+        self,
+    ) -> None:
         self.approvals.clear()

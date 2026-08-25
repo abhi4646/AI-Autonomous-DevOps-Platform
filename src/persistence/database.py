@@ -16,7 +16,7 @@ class Database:
     - audit events
 
     Existing databases are migrated automatically when new
-    execution telemetry columns are introduced.
+    execution telemetry or approval workflow columns are introduced.
     """
 
     def __init__(
@@ -39,11 +39,12 @@ class Database:
         self.connection.row_factory = sqlite3.Row
 
         # Order is important:
-        # 1. Create tables
-        # 2. Migrate legacy execution tables
+        # 1. Create base tables
+        # 2. Migrate legacy tables
         # 3. Create indexes that depend on migrated columns
         self._create_tables()
         self._migrate_execution_table()
+        self._migrate_approval_table()
         self._create_indexes()
 
     @staticmethod
@@ -60,9 +61,8 @@ class Database:
         """
         Create base database tables.
 
-        Existing tables are left intact by SQLite. Any missing
-        execution telemetry columns are added by the migration
-        method after this method completes.
+        Existing tables are left intact by SQLite.
+        Missing columns are added by migration methods.
         """
 
         cursor = self.connection.cursor()
@@ -97,7 +97,10 @@ class Database:
                 status TEXT NOT NULL,
                 decided_by TEXT,
                 created_at TEXT NOT NULL,
-                decided_at TEXT
+                decided_at TEXT,
+                action TEXT,
+                reason TEXT,
+                approval_metadata TEXT
             )
             """
         )
@@ -157,12 +160,46 @@ class Database:
 
         self.connection.commit()
 
+    def _migrate_approval_table(self) -> None:
+        """
+        Upgrade existing approval tables with persistent
+        workflow context without deleting existing records.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            "PRAGMA table_info(approvals)"
+        )
+
+        existing_columns = {
+            row["name"]
+            for row in cursor.fetchall()
+        }
+
+        required_columns = {
+            "action": "TEXT",
+            "reason": "TEXT",
+            "approval_metadata": "TEXT",
+        }
+
+        for (
+            column_name,
+            column_type,
+        ) in required_columns.items():
+            if column_name not in existing_columns:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE approvals
+                    ADD COLUMN {column_name} {column_type}
+                    """
+                )
+
+        self.connection.commit()
+
     def _create_indexes(self) -> None:
         """
         Create indexes after migrations have completed.
-
-        execution_id may not exist in a legacy database until
-        _migrate_execution_table() has run.
         """
 
         cursor = self.connection.cursor()
@@ -223,6 +260,19 @@ class Database:
                 self._deserialize(
                     item["telemetry_metadata"]
                 )
+            )
+
+        return item
+
+    def _deserialize_approval(
+        self,
+        row,
+    ) -> dict:
+        item = dict(row)
+
+        if item.get("approval_metadata") is not None:
+            item["approval_metadata"] = self._deserialize(
+                item["approval_metadata"]
             )
 
         return item
@@ -551,12 +601,18 @@ class Database:
         agent: str,
         risk_level: str,
         status: str = "pending",
+        action: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> None:
         """
-        Persist an approval request.
+        Persist an approval request and its workflow context.
         """
 
         cursor = self.connection.cursor()
+
+        serialized_metadata = self._serialize(
+            metadata
+        )
 
         cursor.execute(
             """
@@ -566,9 +622,11 @@ class Database:
                 agent,
                 risk_level,
                 status,
-                created_at
+                created_at,
+                action,
+                approval_metadata
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 approval_id,
@@ -577,6 +635,8 @@ class Database:
                 risk_level,
                 status,
                 self._timestamp(),
+                action,
+                serialized_metadata,
             ),
         )
 
@@ -587,9 +647,10 @@ class Database:
         approval_id: str,
         status: str,
         decided_by: str,
+        reason: Optional[str] = None,
     ) -> None:
         """
-        Update an existing approval decision.
+        Update and persist an approval decision.
         """
 
         cursor = self.connection.cursor()
@@ -600,13 +661,15 @@ class Database:
             SET
                 status = ?,
                 decided_by = ?,
-                decided_at = ?
+                decided_at = ?,
+                reason = ?
             WHERE approval_id = ?
             """,
             (
                 status,
                 decided_by,
                 self._timestamp(),
+                reason,
                 approval_id,
             ),
         )
@@ -643,7 +706,9 @@ class Database:
         if row is None:
             return None
 
-        return dict(row)
+        return self._deserialize_approval(
+            row
+        )
 
     def get_pending_approvals(
         self,
@@ -664,7 +729,7 @@ class Database:
         )
 
         return [
-            dict(row)
+            self._deserialize_approval(row)
             for row in cursor.fetchall()
         ]
 

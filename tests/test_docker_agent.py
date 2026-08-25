@@ -37,6 +37,7 @@ def test_docker_uses_hardened_runner(
         "stdout": "built",
         "stderr": "",
         "command": [],
+        "telemetry": {},
     }
 
     agent = DockerAgent()
@@ -53,6 +54,8 @@ def test_docker_uses_hardened_runner(
         ],
         timeout=300,
         output_limit=1500,
+        request="CLI command execution",
+        agent="Docker Agent",
     )
 
     assert result["status"] == "success"
@@ -73,6 +76,7 @@ def test_docker_propagates_unavailable(
         "stdout": "",
         "stderr": "Executable not found: docker",
         "command": ["docker"],
+        "telemetry": {},
     }
 
     agent = DockerAgent()
@@ -97,6 +101,7 @@ def test_docker_propagates_timeout(
         "stdout": "",
         "stderr": "",
         "command": ["docker"],
+        "telemetry": {},
     }
 
     agent = DockerAgent()
@@ -104,3 +109,52 @@ def test_docker_propagates_timeout(
     result = agent.build()
 
     assert result["status"] == "timeout"
+
+
+@patch("src.docker.agent.run_command")
+@patch("src.docker.agent.settings")
+def test_docker_passes_request_to_telemetry(
+    mock_settings,
+    mock_run_command,
+):
+    mock_settings.app_mode = "live"
+    mock_settings.docker_image_name = "test-image"
+
+    mock_run_command.return_value = {
+        "status": "success",
+        "returncode": 0,
+        "stdout": "built",
+        "stderr": "",
+        "command": [],
+        "telemetry": {
+            "request": "Build production Docker image",
+            "agent": "Docker Agent",
+        },
+    }
+
+    agent = DockerAgent()
+
+    context = {
+        "request": "Build production Docker image"
+    }
+
+    result = agent.execute(context)
+
+    mock_run_command.assert_called_once_with(
+        [
+            "docker",
+            "build",
+            "-t",
+            "test-image",
+            ".",
+        ],
+        timeout=300,
+        output_limit=1500,
+        request="Build production Docker image",
+        agent="Docker Agent",
+    )
+
+    assert (
+        result["docker"]["telemetry"]["request"]
+        == "Build production Docker image"
+    )

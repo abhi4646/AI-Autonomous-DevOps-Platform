@@ -12,7 +12,9 @@ def test_run_command_success(mock_run):
         stderr="",
     )
 
-    result = run_command(["example", "command"])
+    result = run_command(
+        ["example", "command"]
+    )
 
     assert result["status"] == "success"
     assert result["returncode"] == 0
@@ -32,7 +34,9 @@ def test_run_command_failure(mock_run):
         stderr="command failed",
     )
 
-    result = run_command(["example"])
+    result = run_command(
+        ["example"]
+    )
 
     assert result["status"] == "failed"
     assert result["returncode"] == 1
@@ -43,7 +47,9 @@ def test_run_command_failure(mock_run):
 def test_run_command_missing_executable(mock_run):
     mock_run.side_effect = FileNotFoundError()
 
-    result = run_command(["missing-tool"])
+    result = run_command(
+        ["missing-tool"]
+    )
 
     assert result["status"] == "unavailable"
     assert result["returncode"] is None
@@ -76,7 +82,9 @@ def test_run_command_unexpected_exception(mock_run):
         "unexpected problem"
     )
 
-    result = run_command(["example"])
+    result = run_command(
+        ["example"]
+    )
 
     assert result["status"] == "error"
     assert result["returncode"] is None
@@ -98,3 +106,99 @@ def test_run_command_truncates_output(mock_run):
 
     assert result["stdout"] == "fghij"
     assert result["stderr"] == "67890"
+
+
+@patch("src.core.execution.subprocess.run")
+def test_run_command_includes_telemetry(mock_run):
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout="ok",
+        stderr="",
+    )
+
+    result = run_command(
+        ["example"],
+        request="Test request",
+        agent="test-agent",
+    )
+
+    telemetry = result["telemetry"]
+
+    assert telemetry["execution_id"]
+    assert telemetry["request"] == "Test request"
+    assert telemetry["agent"] == "test-agent"
+    assert telemetry["status"] == "success"
+    assert telemetry["started_at"] is not None
+    assert telemetry["finished_at"] is not None
+    assert telemetry["duration_ms"] >= 0
+    assert telemetry["command"] == ["example"]
+    assert telemetry["error"] is None
+
+
+@patch("src.core.execution.subprocess.run")
+def test_run_command_failure_records_error_telemetry(
+    mock_run,
+):
+    mock_run.return_value = Mock(
+        returncode=1,
+        stdout="",
+        stderr="build failed",
+    )
+
+    result = run_command(
+        ["example"],
+        request="Failed operation",
+        agent="docker",
+    )
+
+    telemetry = result["telemetry"]
+
+    assert telemetry["status"] == "failed"
+    assert telemetry["error"] == "build failed"
+
+
+@patch("src.core.execution.subprocess.run")
+def test_run_command_timeout_records_telemetry(
+    mock_run,
+):
+    mock_run.side_effect = subprocess.TimeoutExpired(
+        cmd=["slow-tool"],
+        timeout=5,
+    )
+
+    result = run_command(
+        ["slow-tool"],
+        timeout=5,
+        request="Slow operation",
+        agent="terraform",
+    )
+
+    telemetry = result["telemetry"]
+
+    assert telemetry["status"] == "timeout"
+    assert telemetry["agent"] == "terraform"
+    assert "5 seconds" in telemetry["error"]
+
+
+@patch("src.core.execution.subprocess.run")
+def test_run_command_generates_unique_execution_ids(
+    mock_run,
+):
+    mock_run.return_value = Mock(
+        returncode=0,
+        stdout="ok",
+        stderr="",
+    )
+
+    first = run_command(
+        ["example"]
+    )
+
+    second = run_command(
+        ["example"]
+    )
+
+    assert (
+        first["telemetry"]["execution_id"]
+        != second["telemetry"]["execution_id"]
+    )

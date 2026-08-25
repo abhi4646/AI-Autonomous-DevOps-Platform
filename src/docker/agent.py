@@ -7,7 +7,10 @@ class DockerAgent(BaseAgent):
     def __init__(self):
         super().__init__("Docker Agent")
 
-    def build(self):
+    def build(
+        self,
+        request="CLI command execution",
+    ):
         command = [
             "docker",
             "build",
@@ -26,9 +29,21 @@ class DockerAgent(BaseAgent):
             command,
             timeout=300,
             output_limit=1500,
+            request=request,
+            agent=self.name,
         )
 
     def execute(self, context=None):
+        request = "CLI command execution"
+
+        if isinstance(context, dict):
+            request = context.get(
+                "request",
+                request,
+            )
+
         return {
-            "docker": self.build()
+            "docker": self.build(
+                request=request
+            )
         }

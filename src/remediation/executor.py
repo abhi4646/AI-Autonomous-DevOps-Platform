@@ -4,6 +4,12 @@ from src.approval.approval_manager import ApprovalManager
 from src.remediation.escalation import (
     RemediationEscalationPolicy,
 )
+from src.remediation.retry_policy import (
+    RemediationRetryPolicy,
+)
+from src.remediation.rollback_policy import (
+    RemediationRollbackPolicy,
+)
 from src.remediation.verifier import RemediationVerifier
 
 
@@ -11,18 +17,20 @@ class RemediationExecutor:
     """
     Controls execution of approved remediation workflows.
 
-    This component never performs remediation directly.
-    It validates the associated approval and delegates
-    execution through the platform orchestrator.
+    The executor never performs uncontrolled retry or rollback.
 
-    When post-remediation health information is supplied,
-    the executor:
+    Lifecycle:
 
-    1. verifies whether health improved,
-    2. evaluates whether the workflow can be closed,
-    3. escalates failed/inconclusive recovery safely.
+    Approved remediation
+    -> controlled execution
+    -> post-remediation verification
+    -> escalation decision
+    -> bounded retry eligibility
+    -> rollback recommendation
 
-    Failed verification never triggers an automatic retry.
+    Retry and rollback decisions are advisory/control-plane
+    decisions only. They never trigger another execution
+    automatically.
     """
 
     def __init__(
@@ -32,6 +40,12 @@ class RemediationExecutor:
         verifier: Optional[RemediationVerifier] = None,
         escalation_policy: Optional[
             RemediationEscalationPolicy
+        ] = None,
+        retry_policy: Optional[
+            RemediationRetryPolicy
+        ] = None,
+        rollback_policy: Optional[
+            RemediationRollbackPolicy
         ] = None,
     ) -> None:
         self.orchestrator = orchestrator
@@ -47,6 +61,16 @@ class RemediationExecutor:
             or RemediationEscalationPolicy()
         )
 
+        self.retry_policy = (
+            retry_policy
+            or RemediationRetryPolicy()
+        )
+
+        self.rollback_policy = (
+            rollback_policy
+            or RemediationRollbackPolicy()
+        )
+
     def execute(
         self,
         approval_id: str,
@@ -54,22 +78,23 @@ class RemediationExecutor:
         after_health: Optional[
             Dict[str, Any]
         ] = None,
+        retry_count: int = 0,
+        rollback_available: bool = False,
     ) -> Dict[str, Any]:
         """
         Resume an approved remediation workflow.
 
-        Pending, rejected, unknown, and otherwise unapproved
-        requests are never allowed to reach agent execution.
+        Pending, rejected, unknown, or otherwise unapproved
+        requests cannot reach execution.
 
-        If after_health is supplied, compare the current
-        health state with the pre-remediation health snapshot
-        stored in approval metadata.
+        When after_health is supplied:
 
-        Verification results are then evaluated by the
-        escalation policy.
+        1. Verify post-remediation health.
+        2. Determine whether escalation is required.
+        3. Determine whether a bounded retry may be requested.
+        4. Determine whether rollback should be recommended.
 
-        Failed remediation is escalated for human review.
-        No automatic retry is authorized here.
+        No retry or rollback is executed automatically.
         """
 
         approval = (
@@ -133,8 +158,8 @@ class RemediationExecutor:
             "result": result,
         }
 
-        # Preserve backwards compatibility when no health
-        # verification information is supplied.
+        # Preserve compatibility with callers that only want
+        # controlled execution and no verification lifecycle.
         if after_health is None:
             return response
 
@@ -168,7 +193,7 @@ class RemediationExecutor:
         )
 
         # -----------------------------------------------------
-        # FAILURE / RECOVERY ESCALATION DECISION
+        # ESCALATION
         # -----------------------------------------------------
 
         escalation = (
@@ -176,8 +201,29 @@ class RemediationExecutor:
             .evaluate(verification)
         )
 
+        # -----------------------------------------------------
+        # BOUNDED RETRY DECISION
+        # -----------------------------------------------------
+
+        retry = self.retry_policy.evaluate(
+            escalation,
+            retry_count=retry_count,
+        )
+
+        # -----------------------------------------------------
+        # ROLLBACK DECISION
+        # -----------------------------------------------------
+
+        rollback = self.rollback_policy.evaluate(
+            verification=verification,
+            retry=retry,
+            rollback_available=rollback_available,
+        )
+
         return {
             **response,
             "verification": verification,
             "escalation": escalation,
+            "retry": retry,
+            "rollback": rollback,
         }

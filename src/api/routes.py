@@ -259,3 +259,45 @@ def decide_approval(
         "decided_at": approval["decided_at"],
         "reason": approval["reason"],
     }
+
+
+# ---------------------------------------------------------
+# INCIDENTS
+# ---------------------------------------------------------
+
+@router.get("/incidents")
+def get_incidents(
+    incident_status: str | None = None,
+):
+    """
+    Return persisted operational incidents.
+
+    Optionally filter incidents by lifecycle status using:
+
+        /api/v1/incidents?incident_status=resolved
+    """
+
+    return database.get_incidents(
+        status=incident_status,
+    )
+
+
+@router.get("/incidents/{incident_id}")
+def get_incident(
+    incident_id: str,
+):
+    """
+    Return one operational incident by its stable incident ID.
+    """
+
+    incident = database.get_incident(
+        incident_id
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    return incident

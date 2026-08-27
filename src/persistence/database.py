@@ -14,6 +14,7 @@ class Database:
     - execution telemetry
     - approval requests
     - audit events
+    - incidents
 
     Existing databases are migrated automatically when new
     execution telemetry or approval workflow columns are introduced.
@@ -117,6 +118,26 @@ class Database:
             """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incidents (
+                incident_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                status TEXT NOT NULL,
+                health_snapshot TEXT,
+                approval_id TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                rollback_available INTEGER NOT NULL DEFAULT 0,
+                incident_metadata TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resolved_at TEXT
+            )
+            """
+        )
+
         self.connection.commit()
 
     def _migrate_execution_table(self) -> None:
@@ -212,6 +233,30 @@ class Database:
             """
         )
 
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_incidents_status
+            ON incidents(status)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_incidents_agent
+            ON incidents(agent)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_incidents_created_at
+            ON incidents(created_at)
+            """
+        )
+
         self.connection.commit()
 
     # ---------------------------------------------------------
@@ -274,6 +319,40 @@ class Database:
             item["approval_metadata"] = self._deserialize(
                 item["approval_metadata"]
             )
+
+        return item
+
+    def _deserialize_incident(
+        self,
+        row,
+    ) -> dict:
+        item = dict(row)
+
+        if item.get("health_snapshot") is not None:
+            item["health_snapshot"] = self._deserialize(
+                item["health_snapshot"]
+            )
+        else:
+            item["health_snapshot"] = {}
+
+        if item.get("incident_metadata") is not None:
+            item["metadata"] = self._deserialize(
+                item["incident_metadata"]
+            )
+        else:
+            item["metadata"] = {}
+
+        item.pop(
+            "incident_metadata",
+            None,
+        )
+
+        item["rollback_available"] = bool(
+            item.get(
+                "rollback_available",
+                0,
+            )
+        )
 
         return item
 
@@ -809,6 +888,219 @@ class Database:
             events.append(event)
 
         return events
+
+    # ---------------------------------------------------------
+    # INCIDENTS
+    # ---------------------------------------------------------
+
+    def save_incident(
+        self,
+        incident: dict,
+    ) -> None:
+        """
+        Persist a newly detected operational incident.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO incidents (
+                incident_id,
+                title,
+                agent,
+                severity,
+                status,
+                health_snapshot,
+                approval_id,
+                retry_count,
+                rollback_available,
+                incident_metadata,
+                created_at,
+                updated_at,
+                resolved_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                incident["incident_id"],
+                incident["title"],
+                incident["agent"],
+                incident["severity"],
+                incident["status"],
+                self._serialize(
+                    incident.get(
+                        "health_snapshot",
+                        {},
+                    )
+                ),
+                incident.get(
+                    "approval_id"
+                ),
+                incident.get(
+                    "retry_count",
+                    0,
+                ),
+                int(
+                    incident.get(
+                        "rollback_available",
+                        False,
+                    )
+                ),
+                self._serialize(
+                    incident.get(
+                        "metadata",
+                        {},
+                    )
+                ),
+                incident["created_at"],
+                incident["updated_at"],
+                incident.get(
+                    "resolved_at"
+                ),
+            ),
+        )
+
+        self.connection.commit()
+
+    def update_incident(
+        self,
+        incident: dict,
+    ) -> None:
+        """
+        Persist the latest state of an existing incident.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            UPDATE incidents
+            SET
+                title = ?,
+                agent = ?,
+                severity = ?,
+                status = ?,
+                health_snapshot = ?,
+                approval_id = ?,
+                retry_count = ?,
+                rollback_available = ?,
+                incident_metadata = ?,
+                updated_at = ?,
+                resolved_at = ?
+            WHERE incident_id = ?
+            """,
+            (
+                incident["title"],
+                incident["agent"],
+                incident["severity"],
+                incident["status"],
+                self._serialize(
+                    incident.get(
+                        "health_snapshot",
+                        {},
+                    )
+                ),
+                incident.get(
+                    "approval_id"
+                ),
+                incident.get(
+                    "retry_count",
+                    0,
+                ),
+                int(
+                    incident.get(
+                        "rollback_available",
+                        False,
+                    )
+                ),
+                self._serialize(
+                    incident.get(
+                        "metadata",
+                        {},
+                    )
+                ),
+                incident["updated_at"],
+                incident.get(
+                    "resolved_at"
+                ),
+                incident["incident_id"],
+            ),
+        )
+
+        if cursor.rowcount == 0:
+            raise KeyError(
+                f"Incident "
+                f"'{incident['incident_id']}' "
+                f"does not exist"
+            )
+
+        self.connection.commit()
+
+    def get_incident(
+        self,
+        incident_id: str,
+    ) -> Optional[dict]:
+        """
+        Retrieve one incident by its stable incident ID.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM incidents
+            WHERE incident_id = ?
+            """,
+            (incident_id,),
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._deserialize_incident(
+            row
+        )
+
+    def get_incidents(
+        self,
+        *,
+        status: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Return incidents, optionally filtered by status.
+        """
+
+        cursor = self.connection.cursor()
+
+        if status is None:
+            cursor.execute(
+                """
+                SELECT *
+                FROM incidents
+                ORDER BY created_at DESC
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT *
+                FROM incidents
+                WHERE status = ?
+                ORDER BY created_at DESC
+                """,
+                (status,),
+            )
+
+        return [
+            self._deserialize_incident(row)
+            for row in cursor.fetchall()
+        ]
 
     # ---------------------------------------------------------
     # DATABASE LIFECYCLE

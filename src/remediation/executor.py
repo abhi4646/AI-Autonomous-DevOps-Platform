@@ -1,6 +1,8 @@
 from typing import Any, Dict, Optional
 
 from src.approval.approval_manager import ApprovalManager
+from src.incident.manager import IncidentManager
+from src.incident.model import IncidentStatus
 from src.remediation.escalation import (
     RemediationEscalationPolicy,
 )
@@ -17,8 +19,6 @@ class RemediationExecutor:
     """
     Controls execution of approved remediation workflows.
 
-    The executor never performs uncontrolled retry or rollback.
-
     Lifecycle:
 
     Approved remediation
@@ -28,9 +28,12 @@ class RemediationExecutor:
     -> bounded retry eligibility
     -> rollback recommendation
 
-    Retry and rollback decisions are advisory/control-plane
-    decisions only. They never trigger another execution
-    automatically.
+    When IncidentManager is configured, the same workflow
+    advances a persistent incident through the matching
+    lifecycle states.
+
+    Retry and rollback decisions never trigger additional
+    execution automatically.
     """
 
     def __init__(
@@ -46,6 +49,9 @@ class RemediationExecutor:
         ] = None,
         rollback_policy: Optional[
             RemediationRollbackPolicy
+        ] = None,
+        incident_manager: Optional[
+            IncidentManager
         ] = None,
     ) -> None:
         self.orchestrator = orchestrator
@@ -71,6 +77,23 @@ class RemediationExecutor:
             or RemediationRollbackPolicy()
         )
 
+        self.incident_manager = (
+            incident_manager
+        )
+
+    def _incident_id_from_approval(
+        self,
+        approval: Dict[str, Any],
+    ) -> Optional[str]:
+        metadata = approval.get(
+            "metadata",
+            {},
+        )
+
+        return metadata.get(
+            "incident_id"
+        )
+
     def execute(
         self,
         approval_id: str,
@@ -83,16 +106,6 @@ class RemediationExecutor:
     ) -> Dict[str, Any]:
         """
         Resume an approved remediation workflow.
-
-        Pending, rejected, unknown, or otherwise unapproved
-        requests cannot reach execution.
-
-        When after_health is supplied:
-
-        1. Verify post-remediation health.
-        2. Determine whether escalation is required.
-        3. Determine whether a bounded retry may be requested.
-        4. Determine whether rollback should be recommended.
 
         No retry or rollback is executed automatically.
         """
@@ -141,11 +154,31 @@ class RemediationExecutor:
                 ),
             }
 
-        request = approval["request"]
+        incident_id = (
+            self._incident_id_from_approval(
+                approval
+            )
+        )
 
-        # -----------------------------------------------------
-        # CONTROLLED REMEDIATION EXECUTION
-        # -----------------------------------------------------
+        if (
+            incident_id is not None
+            and self.incident_manager is not None
+        ):
+            incident = self.incident_manager.get(
+                incident_id
+            )
+
+            if (
+                incident is not None
+                and incident.status
+                == IncidentStatus.PENDING_APPROVAL
+            ):
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.REMEDIATING,
+                )
+
+        request = approval["request"]
 
         result = self.orchestrator.route(
             request=request,
@@ -158,8 +191,11 @@ class RemediationExecutor:
             "result": result,
         }
 
-        # Preserve compatibility with callers that only want
-        # controlled execution and no verification lifecycle.
+        if incident_id is not None:
+            response["incident_id"] = (
+                incident_id
+            )
+
         if after_health is None:
             return response
 
@@ -183,42 +219,91 @@ class RemediationExecutor:
             ),
         }
 
-        # -----------------------------------------------------
-        # POST-REMEDIATION VERIFICATION
-        # -----------------------------------------------------
+        if (
+            incident_id is not None
+            and self.incident_manager is not None
+        ):
+            incident = self.incident_manager.get(
+                incident_id
+            )
+
+            if (
+                incident is not None
+                and incident.status
+                == IncidentStatus.REMEDIATING
+            ):
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.VERIFYING,
+                )
 
         verification = self.verifier.verify(
             before=before_health,
             after=after_health,
         )
 
-        # -----------------------------------------------------
-        # ESCALATION
-        # -----------------------------------------------------
-
         escalation = (
             self.escalation_policy
             .evaluate(verification)
         )
-
-        # -----------------------------------------------------
-        # BOUNDED RETRY DECISION
-        # -----------------------------------------------------
 
         retry = self.retry_policy.evaluate(
             escalation,
             retry_count=retry_count,
         )
 
-        # -----------------------------------------------------
-        # ROLLBACK DECISION
-        # -----------------------------------------------------
-
         rollback = self.rollback_policy.evaluate(
             verification=verification,
             retry=retry,
             rollback_available=rollback_available,
         )
+
+        if (
+            incident_id is not None
+            and self.incident_manager is not None
+        ):
+            self.incident_manager.set_retry_count(
+                incident_id,
+                retry_count,
+            )
+
+            self.incident_manager.set_rollback_available(
+                incident_id,
+                rollback_available,
+            )
+
+            if verification.get(
+                "recovered",
+                False,
+            ):
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.RESOLVED,
+                )
+
+            elif retry.get(
+                "retry_allowed",
+                False,
+            ):
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.RETRY_PENDING,
+                )
+
+            elif rollback.get(
+                "rollback_recommended",
+                False,
+            ):
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.ROLLBACK_PENDING,
+                )
+
+            else:
+                self.incident_manager.transition(
+                    incident_id,
+                    IncidentStatus.ESCALATED,
+                )
 
         return {
             **response,

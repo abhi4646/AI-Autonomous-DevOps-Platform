@@ -5,14 +5,22 @@ from src.approval.approval_manager import ApprovalManager
 from src.audit.audit_logger import AuditLogger
 from src.persistence.database import Database
 
+from src.intelligence.context_builder import (
+    DecisionContextBuilder,
+)
+from src.intelligence.recommender import (
+    RecommendationEngine,
+)
+
 
 class Orchestrator:
     def __init__(self, database=None):
         """
         Main orchestration layer for the Autonomous DevOps Platform.
 
-        A shared Database instance can be supplied so approvals,
-        executions, and audit events persist across the platform.
+        Decision intelligence augments the existing deterministic
+        routing, policy, and safety layers. It never bypasses
+        SafetyGuardrails or human approval controls.
         """
 
         self.agents = []
@@ -20,11 +28,13 @@ class Orchestrator:
         # ---------------------------------------------------------
         # PERSISTENCE
         # ---------------------------------------------------------
+
         self.database = database or Database()
 
         # ---------------------------------------------------------
         # PLATFORM COMPONENTS
         # ---------------------------------------------------------
+
         self.decision_engine = DecisionEngine()
         self.decision_policy = DecisionPolicy()
         self.safety_guardrails = SafetyGuardrails()
@@ -36,6 +46,16 @@ class Orchestrator:
         self.audit_logger = AuditLogger(
             database=self.database
         )
+
+        # ---------------------------------------------------------
+        # DECISION INTELLIGENCE
+        # ---------------------------------------------------------
+
+        self.context_builder = DecisionContextBuilder(
+            database=self.database
+        )
+
+        self.recommendation_engine = RecommendationEngine()
 
     def register_agent(self, agent):
         """Register an agent with the orchestrator."""
@@ -52,26 +72,18 @@ class Orchestrator:
         self,
         request,
         safety_result,
+        intelligence_result=None,
     ):
         """
-        Require human approval only for operations
-        that can modify systems.
+        Determine whether a mutating operation requires human
+        approval.
 
-        Read/check/inspect operations should continue normally.
-        Destructive operations are handled earlier by
-        SafetyGuardrails.
+        Existing safety controls remain authoritative.
+
+        Decision intelligence may increase conservatism by
+        requiring approval, but it may never bypass an approval
+        required by the existing safety layer.
         """
-
-        action = safety_result.get(
-            "action",
-            "execute",
-        )
-
-        if action not in {
-            "review",
-            "escalate",
-        }:
-            return False
 
         request_lower = request.lower()
 
@@ -94,10 +106,109 @@ class Orchestrator:
             "write",
         ]
 
-        return any(
+        mutating_request = any(
             keyword in request_lower
             for keyword in approval_keywords
         )
+
+        if not mutating_request:
+            return False
+
+        safety_action = safety_result.get(
+            "action",
+            "execute",
+        )
+
+        safety_requires_approval = (
+            safety_action
+            in {
+                "review",
+                "escalate",
+            }
+        )
+
+        intelligence_requires_approval = False
+
+        if intelligence_result is not None:
+            intelligence_requires_approval = bool(
+                intelligence_result.get(
+                    "requires_approval",
+                    False,
+                )
+            )
+
+        return (
+            safety_requires_approval
+            or intelligence_requires_approval
+        )
+
+    def _build_intelligence(
+        self,
+        request,
+        selected_agent,
+        decision,
+        context,
+    ):
+        """
+        Build operational decision context and produce an
+        explainable intelligence recommendation.
+
+        Runtime context may optionally provide:
+
+        - environment
+        - incident_id
+        - health_result
+        - metadata
+
+        Existing callers that provide no intelligence-specific
+        context remain supported.
+        """
+
+        runtime_context = dict(
+            context or {}
+        )
+
+        environment = runtime_context.get(
+            "environment",
+            "unknown",
+        )
+
+        incident_id = runtime_context.get(
+            "incident_id"
+        )
+
+        health_result = runtime_context.get(
+            "health_result"
+        )
+
+        metadata = runtime_context.get(
+            "metadata"
+        )
+
+        decision_context = self.context_builder.build(
+            request,
+            agent=selected_agent,
+            environment=environment,
+            routing_confidence=decision.get(
+                "confidence",
+                0.0,
+            ),
+            incident_id=incident_id,
+            health_result=health_result,
+            metadata=metadata,
+        )
+
+        recommendation = (
+            self.recommendation_engine
+            .recommend(
+                decision_context
+            )
+        )
+
+        return {
+            "context": decision_context.to_dict(),
+            "recommendation": recommendation,
+        }
 
     def route(
         self,
@@ -109,6 +220,7 @@ class Orchestrator:
         Route a request through:
 
         DecisionEngine
+        -> Decision Intelligence
         -> DecisionPolicy
         -> SafetyGuardrails
         -> Human Approval
@@ -123,8 +235,9 @@ class Orchestrator:
             )
 
         # ---------------------------------------------------------
-        # 1. AI DECISION
+        # 1. AI ROUTING DECISION
         # ---------------------------------------------------------
+
         decision = (
             self.decision_engine
             .decide_agents(request)
@@ -173,16 +286,33 @@ class Orchestrator:
         )
 
         # ---------------------------------------------------------
-        # 2. DECISION POLICY
+        # 2. DECISION INTELLIGENCE
         # ---------------------------------------------------------
+
+        intelligence = self._build_intelligence(
+            request=request,
+            selected_agent=selected_agent,
+            decision=decision,
+            context=context,
+        )
+
+        intelligence_result = intelligence[
+            "recommendation"
+        ]
+
+        # ---------------------------------------------------------
+        # 3. EXISTING DECISION POLICY
+        # ---------------------------------------------------------
+
         policy_result = (
             self.decision_policy
             .evaluate(decision)
         )
 
         # ---------------------------------------------------------
-        # 3. SAFETY GUARDRAILS
+        # 4. EXISTING SAFETY GUARDRAILS
         # ---------------------------------------------------------
+
         safety_result = (
             self.safety_guardrails
             .evaluate(
@@ -207,8 +337,9 @@ class Orchestrator:
         )
 
         # ---------------------------------------------------------
-        # 4. HARD SAFETY BLOCK
+        # 5. HARD SAFETY BLOCK
         # ---------------------------------------------------------
+
         if safety_action == "block":
             self.audit_logger.log(
                 request=request,
@@ -219,6 +350,7 @@ class Orchestrator:
                 reason=reason,
                 metadata={
                     "decision": decision,
+                    "intelligence": intelligence,
                     "policy": policy_result,
                     "safety": safety_result,
                 },
@@ -230,14 +362,17 @@ class Orchestrator:
                 "agent": selected_agent,
                 "risk": risk,
                 "message": reason,
+                "intelligence": intelligence_result,
             }
 
         # ---------------------------------------------------------
-        # 5. HUMAN APPROVAL
+        # 6. HUMAN APPROVAL
         # ---------------------------------------------------------
+
         if self._requires_human_approval(
             request,
             safety_result,
+            intelligence_result,
         ):
 
             if approval_id is None:
@@ -250,6 +385,7 @@ class Orchestrator:
                         risk=risk,
                         metadata={
                             "decision": decision,
+                            "intelligence": intelligence,
                             "policy": policy_result,
                             "safety": safety_result,
                         },
@@ -262,28 +398,29 @@ class Orchestrator:
                     agent=selected_agent,
                     allowed=False,
                     risk=risk,
-                    reason=reason,
+                    reason=(
+                        intelligence_result.get(
+                            "explanation"
+                        )
+                        or reason
+                    ),
                     metadata={
-                        "approval_id": (
-                            approval[
-                                "approval_id"
-                            ]
-                        ),
+                        "approval_id": approval[
+                            "approval_id"
+                        ],
+                        "intelligence": intelligence,
                     },
                 )
 
                 return {
-                    "status": (
-                        "pending_approval"
-                    ),
+                    "status": "pending_approval",
                     "request": request,
                     "agent": selected_agent,
                     "risk": risk,
-                    "approval_id": (
-                        approval[
-                            "approval_id"
-                        ]
-                    ),
+                    "approval_id": approval[
+                        "approval_id"
+                    ],
+                    "intelligence": intelligence_result,
                     "message": (
                         "Human approval required "
                         "before execution"
@@ -305,6 +442,7 @@ class Orchestrator:
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
+                    "intelligence": intelligence_result,
                     "message": (
                         "Approval request was "
                         "not found"
@@ -323,6 +461,7 @@ class Orchestrator:
                     "agent": selected_agent,
                     "risk": risk,
                     "approval_id": approval_id,
+                    "intelligence": intelligence_result,
                     "message": (
                         "Approval is still pending"
                     ),
@@ -356,6 +495,7 @@ class Orchestrator:
                                 "decided_by"
                             )
                         ),
+                        "intelligence": intelligence,
                     },
                 )
 
@@ -364,6 +504,7 @@ class Orchestrator:
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
+                    "intelligence": intelligence_result,
                     "message": (
                         "Human approval was "
                         "rejected"
@@ -383,6 +524,7 @@ class Orchestrator:
                     "request": request,
                     "agent": selected_agent,
                     "approval_id": approval_id,
+                    "intelligence": intelligence_result,
                     "message": (
                         "Request is not approved "
                         "for execution"
@@ -390,8 +532,9 @@ class Orchestrator:
                 }
 
         # ---------------------------------------------------------
-        # 6. LOCATE AND EXECUTE SELECTED AGENT
+        # 7. LOCATE AND EXECUTE SELECTED AGENT
         # ---------------------------------------------------------
+
         for agent in self.agents:
             if (
                 agent.name.lower()
@@ -407,11 +550,14 @@ class Orchestrator:
                         "request"
                     ] = request
 
+                    execution_context[
+                        "decision_intelligence"
+                    ] = intelligence_result
+
                     result = agent.execute(
                         execution_context
                     )
 
-                    # Persist successful execution
                     self.database.save_execution(
                         request=request,
                         agent=agent.name,
@@ -431,6 +577,7 @@ class Orchestrator:
                         ),
                         metadata={
                             "decision": decision,
+                            "intelligence": intelligence,
                             "policy": policy_result,
                             "safety": safety_result,
                             "approval_id": (
@@ -444,6 +591,7 @@ class Orchestrator:
                         "request": request,
                         "agent": agent.name,
                         "result": result,
+                        "intelligence": intelligence_result,
                     }
 
                 except Exception as exc:
@@ -467,6 +615,7 @@ class Orchestrator:
                         reason=str(exc),
                         metadata={
                             "decision": decision,
+                            "intelligence": intelligence,
                             "policy": policy_result,
                             "safety": safety_result,
                             "approval_id": (
@@ -478,8 +627,9 @@ class Orchestrator:
                     raise
 
         # ---------------------------------------------------------
-        # 7. AGENT RECOMMENDED BUT NOT REGISTERED
+        # 8. AGENT RECOMMENDED BUT NOT REGISTERED
         # ---------------------------------------------------------
+
         self.audit_logger.log(
             request=request,
             action="agent_unavailable",
@@ -490,12 +640,16 @@ class Orchestrator:
                 f"{selected_agent} agent "
                 f"is not registered"
             ),
+            metadata={
+                "intelligence": intelligence,
+            },
         )
 
         return {
             "status": "agent_unavailable",
             "request": request,
             "agent": selected_agent,
+            "intelligence": intelligence_result,
             "message": (
                 f"{selected_agent} agent "
                 f"is not registered"

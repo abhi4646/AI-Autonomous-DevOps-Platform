@@ -6,9 +6,11 @@ from src.ansible.agent import AnsibleAgent
 from src.api.models import (
     ApprovalDecision,
     ExecuteRequest,
+    OperationalSignalRequest,
 )
 from src.docker.agent import DockerAgent
 from src.github.agent import GitHubAgent
+from src.incident.manager import IncidentManager
 from src.jira.agent import JiraAgent
 from src.kubernetes.agent import KubernetesAgent
 from src.monitoring.agent import MonitoringAgent
@@ -46,24 +48,14 @@ orchestrator = Orchestrator(
     database=database,
 )
 
+incident_manager = IncidentManager(
+    database=database,
+)
+
 
 # ---------------------------------------------------------
 # REGISTER DEVOPS AGENTS
 # ---------------------------------------------------------
-
-# DecisionEngine routes requests using these lowercase keys:
-#
-# ansible
-# docker
-# github
-# jira
-# kubernetes
-# monitoring
-# terraform
-#
-# Individual agent classes use human-readable display names,
-# so normalize their names to the routing keys before
-# registering them with the orchestrator.
 
 agents = [
     ("ansible", AnsibleAgent()),
@@ -149,15 +141,6 @@ def get_executions():
 def get_metrics():
     """
     Return aggregate execution metrics.
-
-    Includes:
-    - total executions
-    - success and failure counts
-    - success and failure rates
-    - average execution duration
-    - per-status counts
-    - per-agent activity
-    - recent failures
     """
 
     return database.get_execution_metrics()
@@ -212,9 +195,6 @@ def decide_approval(
 ):
     """
     Approve or reject a pending operation.
-
-    An approved request can subsequently be resumed by
-    calling /execute with the same approval_id.
     """
 
     try:
@@ -301,3 +281,270 @@ def get_incident(
         )
 
     return incident
+
+
+# ---------------------------------------------------------
+# OPERATIONAL SIGNALS
+# ---------------------------------------------------------
+
+@router.post(
+    "/signals",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_operational_signal(
+    payload: OperationalSignalRequest,
+):
+    """
+    Persist a new operational signal.
+
+    A signal may optionally be linked directly to an
+    existing incident using incident_id.
+    """
+
+    signal = payload.model_dump(
+        exclude_none=True,
+    )
+
+    incident_id = signal.get(
+        "incident_id"
+    )
+
+    if incident_id is not None:
+        incident = database.get_incident(
+            incident_id
+        )
+
+        if incident is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Incident not found",
+            )
+
+    if database.get_operational_signal(
+        payload.signal_id
+    ) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Operational signal already exists",
+        )
+
+    try:
+        database.save_operational_signal(
+            signal
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    stored = database.get_operational_signal(
+        payload.signal_id
+    )
+
+    return stored
+
+
+@router.get("/signals")
+def get_operational_signals(
+    incident_id: str | None = None,
+    correlation_key: str | None = None,
+):
+    """
+    Return persisted operational signals.
+
+    Results may be filtered by incident_id,
+    correlation_key, or both.
+    """
+
+    return database.get_operational_signals(
+        incident_id=incident_id,
+        correlation_key=correlation_key,
+    )
+
+
+@router.get("/signals/{signal_id}")
+def get_operational_signal(
+    signal_id: str,
+):
+    """
+    Return one operational signal.
+    """
+
+    signal = database.get_operational_signal(
+        signal_id
+    )
+
+    if signal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operational signal not found",
+        )
+
+    return signal
+
+
+# ---------------------------------------------------------
+# INCIDENT CORRELATION / RCA
+# ---------------------------------------------------------
+
+@router.get(
+    "/incidents/{incident_id}/signals"
+)
+def get_incident_signals(
+    incident_id: str,
+):
+    """
+    Return all operational signals linked
+    to an incident.
+    """
+
+    incident = database.get_incident(
+        incident_id
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    return database.get_incident_signals(
+        incident_id
+    )
+
+
+@router.get(
+    "/incidents/{incident_id}/rca"
+)
+def get_incident_rca_history(
+    incident_id: str,
+):
+    """
+    Return persisted RCA history for an incident.
+    """
+
+    incident = database.get_incident(
+        incident_id
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    return database.get_rca_results(
+        incident_id
+    )
+
+
+@router.get(
+    "/incidents/{incident_id}/rca/latest"
+)
+def get_latest_incident_rca(
+    incident_id: str,
+):
+    """
+    Return the latest RCA result for an incident.
+    """
+
+    incident = database.get_incident(
+        incident_id
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    result = database.get_latest_rca_result(
+        incident_id
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Root-cause analysis "
+                "not found"
+            ),
+        )
+
+    return result
+
+
+@router.post(
+    "/incidents/{incident_id}/rca/analyze"
+)
+def analyze_incident_root_cause(
+    incident_id: str,
+    failure_signal_id: str,
+):
+    """
+    Run explainable root-cause analysis for an incident
+    using its persisted operational signals.
+
+    The failure signal must already be linked to the
+    supplied incident.
+    """
+
+    incident = database.get_incident(
+        incident_id
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    failure_signal = (
+        database
+        .get_operational_signal(
+            failure_signal_id
+        )
+    )
+
+    if failure_signal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operational signal not found",
+        )
+
+    if (
+        failure_signal.get(
+            "incident_id"
+        )
+        != incident_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Failure signal does not belong "
+                "to the incident"
+            ),
+        )
+
+    try:
+        return (
+            incident_manager
+            .analyze_root_cause(
+                incident_id,
+                failure_signal_id,
+            )
+        )
+
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc

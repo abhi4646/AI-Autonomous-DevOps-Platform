@@ -138,6 +138,48 @@ class Database:
             """
         )
 
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operational_signals (
+                signal_id TEXT PRIMARY KEY,
+                incident_id TEXT,
+                signal_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                resource TEXT NOT NULL,
+                message TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                environment TEXT,
+                agent TEXT,
+                correlation_key TEXT,
+                occurred_at TEXT NOT NULL,
+                signal_metadata TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (incident_id)
+                    REFERENCES incidents(incident_id)
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rca_results (
+                rca_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id TEXT NOT NULL,
+                failure_signal_id TEXT NOT NULL,
+                probable_root_cause TEXT,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                explanation TEXT NOT NULL,
+                causal_chain TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (incident_id)
+                    REFERENCES incidents(incident_id),
+                FOREIGN KEY (failure_signal_id)
+                    REFERENCES operational_signals(signal_id)
+            )
+            """
+        )
+
         self.connection.commit()
 
     def _migrate_execution_table(self) -> None:
@@ -254,6 +296,39 @@ class Database:
             CREATE INDEX IF NOT EXISTS
             idx_incidents_created_at
             ON incidents(created_at)
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_operational_signals_incident_id
+            ON operational_signals(incident_id)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_operational_signals_correlation_key
+            ON operational_signals(correlation_key)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_operational_signals_occurred_at
+            ON operational_signals(occurred_at)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_rca_results_incident_id
+            ON rca_results(incident_id)
             """
         )
 
@@ -1101,6 +1176,422 @@ class Database:
             self._deserialize_incident(row)
             for row in cursor.fetchall()
         ]
+
+
+    # ---------------------------------------------------------
+    # OPERATIONAL SIGNALS
+    # ---------------------------------------------------------
+
+    def save_operational_signal(
+        self,
+        signal: dict,
+        *,
+        incident_id: Optional[str] = None,
+    ) -> None:
+        """
+        Persist an operational signal.
+
+        The signal may already contain an incident_id.
+        An explicitly supplied incident_id takes precedence.
+        """
+
+        cursor = self.connection.cursor()
+
+        linked_incident_id = (
+            incident_id
+            if incident_id is not None
+            else signal.get("incident_id")
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO operational_signals (
+                signal_id,
+                incident_id,
+                signal_type,
+                source,
+                resource,
+                message,
+                severity,
+                environment,
+                agent,
+                correlation_key,
+                occurred_at,
+                signal_metadata,
+                created_at
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                signal["signal_id"],
+                linked_incident_id,
+                signal["signal_type"],
+                signal["source"],
+                signal["resource"],
+                signal.get(
+                    "message",
+                    "",
+                ),
+                signal["severity"],
+                signal.get(
+                    "environment"
+                ),
+                signal.get(
+                    "agent"
+                ),
+                signal.get(
+                    "correlation_key"
+                ),
+                signal["occurred_at"],
+                self._serialize(
+                    signal.get(
+                        "metadata",
+                        {},
+                    )
+                ),
+                signal.get(
+                    "created_at",
+                    self._timestamp(),
+                ),
+            ),
+        )
+
+        self.connection.commit()
+
+    def get_operational_signal(
+        self,
+        signal_id: str,
+    ) -> Optional[dict]:
+        """
+        Retrieve one operational signal.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM operational_signals
+            WHERE signal_id = ?
+            """,
+            (
+                signal_id,
+            ),
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return (
+            self._deserialize_operational_signal(
+                row
+            )
+        )
+
+    def get_operational_signals(
+        self,
+        *,
+        incident_id: Optional[str] = None,
+        correlation_key: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Retrieve operational signals.
+
+        Results are ordered chronologically.
+        """
+
+        cursor = self.connection.cursor()
+
+        query = """
+            SELECT *
+            FROM operational_signals
+        """
+
+        conditions = []
+        parameters = []
+
+        if incident_id is not None:
+            conditions.append(
+                "incident_id = ?"
+            )
+
+            parameters.append(
+                incident_id
+            )
+
+        if correlation_key is not None:
+            conditions.append(
+                "correlation_key = ?"
+            )
+
+            parameters.append(
+                correlation_key
+            )
+
+        if conditions:
+            query += (
+                " WHERE "
+                + " AND ".join(
+                    conditions
+                )
+            )
+
+        query += (
+            " ORDER BY occurred_at ASC"
+        )
+
+        cursor.execute(
+            query,
+            tuple(parameters),
+        )
+
+        return [
+            self._deserialize_operational_signal(
+                row
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def get_incident_signals(
+        self,
+        incident_id: str,
+    ) -> list[dict]:
+        """
+        Retrieve signals linked to one incident.
+        """
+
+        return (
+            self.get_operational_signals(
+                incident_id=incident_id
+            )
+        )
+
+    def link_signal_to_incident(
+        self,
+        signal_id: str,
+        incident_id: str,
+    ) -> None:
+        """
+        Link an existing operational signal
+        to an incident.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            UPDATE operational_signals
+            SET incident_id = ?
+            WHERE signal_id = ?
+            """,
+            (
+                incident_id,
+                signal_id,
+            ),
+        )
+
+        if cursor.rowcount == 0:
+            raise KeyError(
+                f"Operational signal "
+                f"'{signal_id}' "
+                f"does not exist"
+            )
+
+        self.connection.commit()
+
+    def _deserialize_operational_signal(
+        self,
+        row: sqlite3.Row,
+    ) -> dict:
+        """
+        Convert an operational signal row
+        into a dictionary.
+        """
+
+        signal = dict(row)
+
+        metadata = signal.pop(
+            "signal_metadata",
+            None,
+        )
+
+        signal["metadata"] = (
+            self._deserialize(
+                metadata
+            )
+            if metadata is not None
+            else {}
+        )
+
+        return signal
+
+    # ---------------------------------------------------------
+    # ROOT-CAUSE ANALYSIS
+    # ---------------------------------------------------------
+
+    def save_rca_result(
+        self,
+        incident_id: str,
+        result: dict,
+    ) -> int:
+        """
+        Persist one explainable RCA result.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO rca_results (
+                incident_id,
+                failure_signal_id,
+                probable_root_cause,
+                confidence,
+                explanation,
+                causal_chain,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                incident_id,
+                result["failure_signal_id"],
+                self._serialize(
+                    result.get(
+                        "probable_root_cause"
+                    )
+                ),
+                result.get(
+                    "confidence",
+                    0.0,
+                ),
+                result.get(
+                    "explanation",
+                    "",
+                ),
+                self._serialize(
+                    result.get(
+                        "chain",
+                        [],
+                    )
+                ),
+                result.get(
+                    "created_at",
+                    self._timestamp(),
+                ),
+            ),
+        )
+
+        self.connection.commit()
+
+        return cursor.lastrowid
+
+    def get_rca_results(
+        self,
+        incident_id: str,
+    ) -> list[dict]:
+        """
+        Retrieve RCA history for an incident.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM rca_results
+            WHERE incident_id = ?
+            ORDER BY rca_id ASC
+            """,
+            (
+                incident_id,
+            ),
+        )
+
+        return [
+            self._deserialize_rca_result(
+                row
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def get_latest_rca_result(
+        self,
+        incident_id: str,
+    ) -> Optional[dict]:
+        """
+        Retrieve the most recent RCA result.
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM rca_results
+            WHERE incident_id = ?
+            ORDER BY rca_id DESC
+            LIMIT 1
+            """,
+            (
+                incident_id,
+            ),
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._deserialize_rca_result(
+            row
+        )
+
+    def _deserialize_rca_result(
+        self,
+        row: sqlite3.Row,
+    ) -> dict:
+        """
+        Convert an RCA row into a dictionary.
+        """
+
+        result = dict(row)
+
+        probable_root_cause = (
+            result.get(
+                "probable_root_cause"
+            )
+        )
+
+        result[
+            "probable_root_cause"
+        ] = (
+            self._deserialize(
+                probable_root_cause
+            )
+            if probable_root_cause
+            is not None
+            else None
+        )
+
+        causal_chain = result.pop(
+            "causal_chain",
+            None,
+        )
+
+        result["chain"] = (
+            self._deserialize(
+                causal_chain
+            )
+            if causal_chain is not None
+            else []
+        )
+
+        return result
 
     # ---------------------------------------------------------
     # DATABASE LIFECYCLE

@@ -17,6 +17,7 @@ from src.monitoring.agent import MonitoringAgent
 from src.orchestrator.orchestrator import Orchestrator
 from src.persistence.database import Database
 from src.security.auth import AuthenticatedPrincipal
+from src.security.identity import build_authenticated_context
 from src.security.operations import can_execute_request
 from src.security.rbac import (
     Permission,
@@ -126,10 +127,17 @@ def execute(
             ),
         )
 
+    authenticated_context = (
+        build_authenticated_context(
+            principal
+        )
+    )
+
     try:
         result = orchestrator.route(
             request=payload.request,
             approval_id=payload.approval_id,
+            context=authenticated_context,
         )
 
     except ValueError as exc:

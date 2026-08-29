@@ -114,9 +114,43 @@ def test_operator_normal_request_reaches_orchestrator(
         assert response.status_code == 200
         assert response.json() == expected_result
 
-        route_mock.assert_called_once_with(
-            request="check system health",
-            approval_id=None,
+        route_mock.assert_called_once()
+
+        call_kwargs = (
+            route_mock.call_args.kwargs
+        )
+
+        assert call_kwargs[
+            "request"
+        ] == "check system health"
+
+        assert call_kwargs[
+            "approval_id"
+        ] is None
+
+        identity = call_kwargs[
+            "context"
+        ][
+            "authenticated_principal"
+        ]
+
+        assert identity[
+            "subject"
+        ] == "api-key-user"
+
+        assert identity[
+            "role"
+        ] == "operator"
+
+        assert identity[
+            "api_key_id"
+        ] is not None
+
+        assert (
+            "operator-secret"
+            not in str(
+                call_kwargs["context"]
+            )
         )
 
     finally:
@@ -167,11 +201,45 @@ def test_admin_destructive_request_reaches_safety_pipeline(
         assert response.status_code == 200
         assert response.json() == expected_result
 
-        route_mock.assert_called_once_with(
-            request=(
-                "terraform destroy production"
-            ),
-            approval_id=None,
+        route_mock.assert_called_once()
+
+        call_kwargs = (
+            route_mock.call_args.kwargs
+        )
+
+        assert call_kwargs[
+            "request"
+        ] == (
+            "terraform destroy production"
+        )
+
+        assert call_kwargs[
+            "approval_id"
+        ] is None
+
+        identity = call_kwargs[
+            "context"
+        ][
+            "authenticated_principal"
+        ]
+
+        assert identity[
+            "subject"
+        ] == "api-key-user"
+
+        assert identity[
+            "role"
+        ] == "admin"
+
+        assert identity[
+            "api_key_id"
+        ] is not None
+
+        assert (
+            "admin-secret"
+            not in str(
+                call_kwargs["context"]
+            )
         )
 
     finally:

@@ -4,6 +4,7 @@ from src.safety.guardrails import SafetyGuardrails
 from src.approval.approval_manager import ApprovalManager
 from src.audit.audit_logger import AuditLogger
 from src.persistence.database import Database
+from src.security.identity import identity_from_context
 
 from src.intelligence.context_builder import (
     DecisionContextBuilder,
@@ -229,6 +230,12 @@ class Orchestrator:
         -> Audit Logging
         """
 
+        authenticated_identity = (
+            identity_from_context(
+                context
+            )
+        )
+
         if not request:
             raise ValueError(
                 "Request cannot be empty"
@@ -246,6 +253,7 @@ class Orchestrator:
         if not decision["matched"]:
             self.audit_logger.log(
                 request=request,
+                identity=authenticated_identity,
                 action="no_route",
                 allowed=False,
                 risk="low",
@@ -267,6 +275,7 @@ class Orchestrator:
         if not recommended_agents:
             self.audit_logger.log(
                 request=request,
+                identity=authenticated_identity,
                 action="no_route",
                 allowed=False,
                 risk="low",
@@ -343,6 +352,7 @@ class Orchestrator:
         if safety_action == "block":
             self.audit_logger.log(
                 request=request,
+                identity=authenticated_identity,
                 action="block",
                 agent=selected_agent,
                 allowed=False,
@@ -394,6 +404,7 @@ class Orchestrator:
 
                 self.audit_logger.log(
                     request=request,
+                    identity=authenticated_identity,
                     action="approval_requested",
                     agent=selected_agent,
                     allowed=False,
@@ -473,6 +484,7 @@ class Orchestrator:
             ):
                 self.audit_logger.log(
                     request=request,
+                    identity=authenticated_identity,
                     action="rejected",
                     agent=selected_agent,
                     allowed=False,
@@ -567,6 +579,7 @@ class Orchestrator:
 
                     self.audit_logger.log(
                         request=request,
+                        identity=authenticated_identity,
                         action="execute",
                         agent=agent.name,
                         allowed=True,
@@ -606,6 +619,7 @@ class Orchestrator:
 
                     self.audit_logger.log(
                         request=request,
+                        identity=authenticated_identity,
                         action=(
                             "execution_failed"
                         ),
@@ -632,6 +646,7 @@ class Orchestrator:
 
         self.audit_logger.log(
             request=request,
+            identity=authenticated_identity,
             action="agent_unavailable",
             agent=selected_agent,
             allowed=False,

@@ -37,7 +37,9 @@ api_key_header = APIKeyHeader(
 )
 
 
-def _hash_api_key(api_key: str) -> str:
+def _hash_api_key(
+    api_key: str,
+) -> str:
     """
     Return a deterministic SHA-256 digest for an API key.
 
@@ -54,7 +56,9 @@ def _configured_api_key() -> Optional[str]:
     Return the API key configured for the current environment.
     """
 
-    value = os.getenv("DEVOPS_API_KEY")
+    value = os.getenv(
+        "DEVOPS_API_KEY"
+    )
 
     if value is None:
         return None
@@ -67,6 +71,10 @@ def _configured_api_key() -> Optional[str]:
 def _configured_role() -> Role:
     """
     Return the role assigned to the configured API key.
+
+    Invalid role configuration raises RuntimeError.
+    The API authentication boundary converts this into
+    a controlled service-unavailable response.
     """
 
     raw_role = os.getenv(
@@ -75,17 +83,24 @@ def _configured_role() -> Role:
     ).strip().lower()
 
     try:
-        return Role(raw_role)
+        return Role(
+            raw_role
+        )
 
     except ValueError as exc:
         raise RuntimeError(
             "DEVOPS_API_ROLE must be one of: "
-            + ", ".join(role.value for role in Role)
+            + ", ".join(
+                role.value
+                for role in Role
+            )
         ) from exc
 
 
 def authenticate_api_key(
-    api_key: Optional[str] = Security(api_key_header),
+    api_key: Optional[str] = Security(
+        api_key_header
+    ),
 ) -> AuthenticatedPrincipal:
     """
     Authenticate an API request using the X-API-Key header.
@@ -93,22 +108,34 @@ def authenticate_api_key(
     Authentication is fail-closed:
 
     - missing server configuration -> 503
+    - invalid server role configuration -> 503
     - missing client credential -> 401
     - invalid credential -> 401
     - valid credential -> authenticated principal
     """
 
-    configured_key = _configured_api_key()
+    configured_key = (
+        _configured_api_key()
+    )
 
     if configured_key is None:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API authentication is not configured",
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "API authentication is not configured"
+            ),
         )
 
-    if api_key is None or not api_key.strip():
+    if (
+        api_key is None
+        or not api_key.strip()
+    ):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
             detail="API key required",
             headers={
                 "WWW-Authenticate": "ApiKey",
@@ -120,16 +147,33 @@ def authenticate_api_key(
         configured_key,
     ):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
             detail="Invalid API key",
             headers={
                 "WWW-Authenticate": "ApiKey",
             },
         )
 
+    try:
+        configured_role = (
+            _configured_role()
+        )
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "API authorization is misconfigured"
+            ),
+        ) from exc
+
     return AuthenticatedPrincipal(
         subject="api-key-user",
-        role=_configured_role(),
+        role=configured_role,
         api_key_id=_hash_api_key(
             configured_key
         )[:12],

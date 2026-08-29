@@ -1,5 +1,11 @@
 from typing import Any, Dict, Optional
 
+from src.correlation.causal_chain import (
+    CausalChainBuilder,
+)
+from src.correlation.signal import (
+    OperationalSignal,
+)
 from src.incident.lifecycle import (
     IncidentLifecycle,
 )
@@ -15,8 +21,8 @@ class IncidentManager:
     """
     Coordinates persistent incident lifecycle operations.
 
-    The manager provides the boundary between remediation
-    workflows and incident persistence.
+    The manager provides the boundary between remediation,
+    correlation, RCA, and incident persistence.
 
     All lifecycle transitions pass through IncidentLifecycle
     before being persisted.
@@ -28,11 +34,20 @@ class IncidentManager:
         lifecycle: Optional[
             IncidentLifecycle
         ] = None,
+        causal_chain_builder: Optional[
+            CausalChainBuilder
+        ] = None,
     ) -> None:
         self.database = database
+
         self.lifecycle = (
             lifecycle
             or IncidentLifecycle()
+        )
+
+        self.causal_chain_builder = (
+            causal_chain_builder
+            or CausalChainBuilder()
         )
 
     # ---------------------------------------------------------
@@ -158,6 +173,7 @@ class IncidentManager:
             )
 
         incident.approval_id = approval_id
+
         incident.updated_at = (
             incident._timestamp()
         )
@@ -194,6 +210,7 @@ class IncidentManager:
             )
 
         incident.retry_count = retry_count
+
         incident.updated_at = (
             incident._timestamp()
         )
@@ -237,3 +254,197 @@ class IncidentManager:
         )
 
         return incident
+
+    # ---------------------------------------------------------
+    # OPERATIONAL SIGNALS
+    # ---------------------------------------------------------
+
+    def add_signal(
+        self,
+        incident_id: str,
+        signal: OperationalSignal,
+    ) -> OperationalSignal:
+        """
+        Persist an operational signal and link it to
+        an existing incident.
+
+        The supplied incident ID is authoritative even if
+        the signal was created without an incident ID.
+        """
+
+        incident = self.get(
+            incident_id
+        )
+
+        if incident is None:
+            raise KeyError(
+                f"Incident "
+                f"'{incident_id}' "
+                f"does not exist"
+            )
+
+        existing = (
+            self.database
+            .get_operational_signal(
+                signal.signal_id
+            )
+        )
+
+        if existing is not None:
+            raise ValueError(
+                f"Operational signal "
+                f"'{signal.signal_id}' "
+                f"already exists"
+            )
+
+        self.database.save_operational_signal(
+            signal.to_dict(),
+            incident_id=incident_id,
+        )
+
+        stored = (
+            self.database
+            .get_operational_signal(
+                signal.signal_id
+            )
+        )
+
+        if stored is None:
+            raise RuntimeError(
+                "Operational signal was not persisted"
+            )
+
+        return OperationalSignal.from_dict(
+            stored
+        )
+
+    def get_signals(
+        self,
+        incident_id: str,
+    ) -> list[OperationalSignal]:
+        """
+        Return operational signals linked to an incident
+        in chronological order.
+        """
+
+        incident = self.get(
+            incident_id
+        )
+
+        if incident is None:
+            raise KeyError(
+                f"Incident "
+                f"'{incident_id}' "
+                f"does not exist"
+            )
+
+        rows = (
+            self.database
+            .get_incident_signals(
+                incident_id
+            )
+        )
+
+        return [
+            OperationalSignal.from_dict(
+                row
+            )
+            for row in rows
+        ]
+
+    # ---------------------------------------------------------
+    # ROOT-CAUSE ANALYSIS
+    # ---------------------------------------------------------
+
+    def analyze_root_cause(
+        self,
+        incident_id: str,
+        failure_signal_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Analyze persisted incident signals against a
+        supplied failure signal and persist the resulting
+        explainable RCA.
+
+        RCA does not mutate the incident lifecycle.
+        """
+
+        incident = self.get(
+            incident_id
+        )
+
+        if incident is None:
+            raise KeyError(
+                f"Incident "
+                f"'{incident_id}' "
+                f"does not exist"
+            )
+
+        failure_data = (
+            self.database
+            .get_operational_signal(
+                failure_signal_id
+            )
+        )
+
+        if failure_data is None:
+            raise KeyError(
+                f"Operational signal "
+                f"'{failure_signal_id}' "
+                f"does not exist"
+            )
+
+        if (
+            failure_data.get(
+                "incident_id"
+            )
+            != incident_id
+        ):
+            raise ValueError(
+                "Failure signal does not belong "
+                "to the incident"
+            )
+
+        signals = self.get_signals(
+            incident_id
+        )
+
+        failure_signal = next(
+            (
+                signal
+                for signal in signals
+                if signal.signal_id
+                == failure_signal_id
+            ),
+            None,
+        )
+
+        if failure_signal is None:
+            raise KeyError(
+                f"Operational signal "
+                f"'{failure_signal_id}' "
+                f"is not linked to incident "
+                f"'{incident_id}'"
+            )
+
+        result = (
+            self.causal_chain_builder
+            .build(
+                failure_signal,
+                signals,
+            )
+        )
+
+        rca_id = (
+            self.database
+            .save_rca_result(
+                incident_id,
+                result,
+            )
+        )
+
+        return {
+            "rca_id": rca_id,
+            "incident_id": incident_id,
+            **result,
+        }

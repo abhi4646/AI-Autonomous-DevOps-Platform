@@ -26,3 +26,21 @@ class ApprovalDecision(BaseModel):
         pattern="^(approved|rejected)$",
     )
     reason: Optional[str] = None
+
+
+class OperationalSignalRequest(BaseModel):
+    signal_id: str = Field(..., min_length=1)
+    signal_type: str = Field(..., min_length=1)
+    source: str = Field(..., min_length=1)
+    resource: str = Field(..., min_length=1)
+    severity: str = Field(..., min_length=1)
+    message: str = ""
+    agent: Optional[str] = None
+    environment: Optional[str] = None
+    incident_id: Optional[str] = None
+    correlation_key: Optional[str] = None
+    occurred_at: str = Field(..., min_length=1)
+    created_at: Optional[str] = None
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+    )

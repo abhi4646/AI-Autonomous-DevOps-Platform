@@ -25,6 +25,7 @@ class Permission(str, Enum):
     READ_AUDIT = "read_audit"
 
     EXECUTE_OPERATION = "execute_operation"
+    EXECUTE_DESTRUCTIVE = "execute_destructive"
 
     READ_APPROVALS = "read_approvals"
     DECIDE_APPROVALS = "decide_approvals"

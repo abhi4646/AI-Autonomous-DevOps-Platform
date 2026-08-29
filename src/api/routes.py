@@ -17,6 +17,7 @@ from src.monitoring.agent import MonitoringAgent
 from src.orchestrator.orchestrator import Orchestrator
 from src.persistence.database import Database
 from src.security.auth import AuthenticatedPrincipal
+from src.security.operations import can_execute_request
 from src.security.rbac import (
     Permission,
     require_permission,
@@ -112,6 +113,18 @@ def execute(
     If approval_id is supplied, the orchestrator attempts
     to resume a previously approved workflow.
     """
+
+    if not can_execute_request(
+        principal,
+        payload.request,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Destructive operation requires "
+                "elevated permissions"
+            ),
+        )
 
     try:
         result = orchestrator.route(

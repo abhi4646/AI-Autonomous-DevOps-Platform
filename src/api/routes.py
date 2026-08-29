@@ -1,6 +1,6 @@
 import os
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.ansible.agent import AnsibleAgent
 from src.api.models import (
@@ -16,6 +16,11 @@ from src.kubernetes.agent import KubernetesAgent
 from src.monitoring.agent import MonitoringAgent
 from src.orchestrator.orchestrator import Orchestrator
 from src.persistence.database import Database
+from src.security.auth import AuthenticatedPrincipal
+from src.security.rbac import (
+    Permission,
+    require_permission,
+)
 from src.terraform.agent import TerraformAgent
 
 
@@ -93,7 +98,14 @@ def health():
 # ---------------------------------------------------------
 
 @router.post("/execute")
-def execute(payload: ExecuteRequest):
+def execute(
+    payload: ExecuteRequest,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.EXECUTE_OPERATION
+        )
+    ),
+):
     """
     Submit a DevOps request to the orchestrator.
 
@@ -127,7 +139,13 @@ def execute(payload: ExecuteRequest):
 # ---------------------------------------------------------
 
 @router.get("/executions")
-def get_executions():
+def get_executions(
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_EXECUTIONS
+        )
+    ),
+):
     """Return persisted agent execution history."""
 
     return database.get_executions()
@@ -138,7 +156,13 @@ def get_executions():
 # ---------------------------------------------------------
 
 @router.get("/metrics")
-def get_metrics():
+def get_metrics(
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_METRICS
+        )
+    ),
+):
     """
     Return aggregate execution metrics.
     """
@@ -151,7 +175,13 @@ def get_metrics():
 # ---------------------------------------------------------
 
 @router.get("/audit")
-def get_audit_events():
+def get_audit_events(
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_AUDIT
+        )
+    ),
+):
     """Return persisted audit events."""
 
     return database.get_audit_events()
@@ -162,7 +192,13 @@ def get_audit_events():
 # ---------------------------------------------------------
 
 @router.get("/approvals")
-def get_pending_approvals():
+def get_pending_approvals(
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_APPROVALS
+        )
+    ),
+):
     """Return pending human approval requests."""
 
     return orchestrator.approval_manager.get_pending()
@@ -171,6 +207,11 @@ def get_pending_approvals():
 @router.get("/approvals/{approval_id}")
 def get_approval(
     approval_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_APPROVALS
+        )
+    ),
 ):
     """Return one approval request."""
 
@@ -192,6 +233,11 @@ def get_approval(
 @router.post("/approvals/decision")
 def decide_approval(
     payload: ApprovalDecision,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.DECIDE_APPROVALS
+        )
+    ),
 ):
     """
     Approve or reject a pending operation.
@@ -248,6 +294,11 @@ def decide_approval(
 @router.get("/incidents")
 def get_incidents(
     incident_status: str | None = None,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_INCIDENTS
+        )
+    ),
 ):
     """
     Return persisted operational incidents.
@@ -265,6 +316,11 @@ def get_incidents(
 @router.get("/incidents/{incident_id}")
 def get_incident(
     incident_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_INCIDENTS
+        )
+    ),
 ):
     """
     Return one operational incident by its stable incident ID.
@@ -293,6 +349,11 @@ def get_incident(
 )
 def create_operational_signal(
     payload: OperationalSignalRequest,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.CREATE_SIGNALS
+        )
+    ),
 ):
     """
     Persist a new operational signal.
@@ -350,6 +411,11 @@ def create_operational_signal(
 def get_operational_signals(
     incident_id: str | None = None,
     correlation_key: str | None = None,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_SIGNALS
+        )
+    ),
 ):
     """
     Return persisted operational signals.
@@ -367,6 +433,11 @@ def get_operational_signals(
 @router.get("/signals/{signal_id}")
 def get_operational_signal(
     signal_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_SIGNALS
+        )
+    ),
 ):
     """
     Return one operational signal.
@@ -394,6 +465,11 @@ def get_operational_signal(
 )
 def get_incident_signals(
     incident_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_SIGNALS
+        )
+    ),
 ):
     """
     Return all operational signals linked
@@ -420,6 +496,11 @@ def get_incident_signals(
 )
 def get_incident_rca_history(
     incident_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_RCA
+        )
+    ),
 ):
     """
     Return persisted RCA history for an incident.
@@ -445,6 +526,11 @@ def get_incident_rca_history(
 )
 def get_latest_incident_rca(
     incident_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.READ_RCA
+        )
+    ),
 ):
     """
     Return the latest RCA result for an incident.
@@ -482,6 +568,11 @@ def get_latest_incident_rca(
 def analyze_incident_root_cause(
     incident_id: str,
     failure_signal_id: str,
+    principal: AuthenticatedPrincipal = Depends(
+        require_permission(
+            Permission.RUN_RCA
+        )
+    ),
 ):
     """
     Run explainable root-cause analysis for an incident

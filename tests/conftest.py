@@ -2,35 +2,83 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from src.security.auth import (
+    AuthenticatedPrincipal,
+    Role,
+    authenticate_api_key,
+)
+
 
 # ---------------------------------------------------------
 # PYTEST DATABASE ISOLATION
 # ---------------------------------------------------------
 
-# Use a dedicated temporary database path for API tests.
-#
-# We intentionally do NOT use TemporaryDirectory here because
-# the API owns a module-level SQLite connection. On Windows,
-# SQLite can keep that file locked until interpreter shutdown,
-# which prevents TemporaryDirectory from cleaning itself up.
 _test_database_path = (
     Path(tempfile.gettempdir())
     / "autonomous_devops_platform_pytest.db"
 )
 
-# Remove any database left behind by an earlier test run.
 if _test_database_path.exists():
     try:
         _test_database_path.unlink()
     except PermissionError:
         pass
 
-# This environment variable is set before pytest imports
-# src.api.app -> src.api.routes.
-os.environ["DEVOPS_DB_PATH"] = str(_test_database_path)
+os.environ["DEVOPS_DB_PATH"] = str(
+    _test_database_path
+)
 
 
-def pytest_sessionfinish(session, exitstatus):
+# ---------------------------------------------------------
+# TEST AUTHENTICATION
+# ---------------------------------------------------------
+
+def _test_admin_principal():
+    """
+    Default authenticated identity used by the existing
+    API regression tests.
+
+    Dedicated security tests may temporarily remove this
+    dependency override to exercise real authentication.
+    """
+
+    return AuthenticatedPrincipal(
+        subject="pytest-admin",
+        role=Role.ADMIN,
+        api_key_id="pytest-key",
+    )
+
+
+@pytest.fixture(
+    scope="session",
+    autouse=True,
+)
+def configure_test_authentication():
+    """
+    Authenticate existing API tests without requiring
+    every legacy request to manually send an API key.
+    """
+
+    from src.api.app import app
+
+    app.dependency_overrides[
+        authenticate_api_key
+    ] = _test_admin_principal
+
+    yield
+
+    app.dependency_overrides.pop(
+        authenticate_api_key,
+        None,
+    )
+
+
+def pytest_sessionfinish(
+    session,
+    exitstatus,
+):
     """
     Close the API SQLite connection and remove the temporary
     test database after the complete pytest session.
@@ -47,6 +95,4 @@ def pytest_sessionfinish(session, exitstatus):
         if _test_database_path.exists():
             _test_database_path.unlink()
     except PermissionError:
-        # Windows may briefly retain a file handle during shutdown.
-        # The next test session will attempt cleanup again.
         pass

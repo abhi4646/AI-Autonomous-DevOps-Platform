@@ -27,7 +27,27 @@ class AuditLogger:
         risk: str = "low",
         reason: str = "",
         metadata: Dict[str, Any] | None = None,
+        identity: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
+        """
+        Record one structured audit event.
+
+        Authenticated identity is stored as structured
+        metadata. Raw API credentials must never be passed
+        to this logger.
+
+        The explicit identity argument is authoritative and
+        cannot be overwritten by caller-provided metadata.
+        """
+
+        event_metadata = dict(
+            metadata or {}
+        )
+
+        if identity is not None:
+            event_metadata[
+                "authenticated_principal"
+            ] = dict(identity)
 
         event = {
             "event_id": str(uuid.uuid4()),
@@ -40,7 +60,7 @@ class AuditLogger:
             "allowed": allowed,
             "risk": risk,
             "reason": reason,
-            "metadata": metadata or {},
+            "metadata": event_metadata,
         }
 
         self.events.append(event)
@@ -55,21 +75,29 @@ class AuditLogger:
                     "agent": agent,
                     "allowed": allowed,
                     "risk": risk,
-                    "metadata": event["metadata"],
+                    "metadata": event[
+                        "metadata"
+                    ],
                 },
             )
 
         return event
 
-    def get_events(self) -> List[Dict[str, Any]]:
+    def get_events(
+        self,
+    ) -> List[Dict[str, Any]]:
         return list(self.events)
 
-    def get_blocked_events(self) -> List[Dict[str, Any]]:
+    def get_blocked_events(
+        self,
+    ) -> List[Dict[str, Any]]:
         return [
             event
             for event in self.events
             if not event["allowed"]
         ]
 
-    def clear(self) -> None:
+    def clear(
+        self,
+    ) -> None:
         self.events.clear()

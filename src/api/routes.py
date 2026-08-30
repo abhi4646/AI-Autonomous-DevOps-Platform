@@ -271,7 +271,7 @@ def decide_approval(
                 .approval_manager
                 .approve(
                     approval_id=payload.approval_id,
-                    decided_by=payload.decided_by,
+                    decided_by=principal.subject,
                     reason=payload.reason,
                 )
             )
@@ -282,7 +282,7 @@ def decide_approval(
                 .approval_manager
                 .reject(
                     approval_id=payload.approval_id,
-                    decided_by=payload.decided_by,
+                    decided_by=principal.subject,
                     reason=payload.reason,
                 )
             )
